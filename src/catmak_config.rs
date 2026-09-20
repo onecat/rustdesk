@@ -45,6 +45,14 @@ pub(crate) fn apply() {
     };
 
     {
+        // Hide account-related pages/features in this managed client.
+        config::HARD_SETTINGS
+            .write()
+            .unwrap()
+            .insert("disable-account".to_owned(), "Y".to_owned());
+    }
+
+    {
         let mut settings = config::OVERWRITE_SETTINGS.write().unwrap();
         for (key, value) in [
             (
@@ -89,6 +97,7 @@ pub(crate) fn apply() {
             (keys::OPTION_HIDE_SERVER_SETTINGS, "Y"),
             (keys::OPTION_HIDE_HELP_CARDS, "Y"),
             (keys::OPTION_HIDE_STOP_SERVICE, "Y"),
+            (keys::OPTION_HIDE_REMOTE_PRINTER_SETTINGS, "Y"),
             (keys::OPTION_ALLOW_DEEP_LINK_SERVER_SETTINGS, "N"),
         ] {
             builtin.insert(key.to_owned(), value.to_owned());
