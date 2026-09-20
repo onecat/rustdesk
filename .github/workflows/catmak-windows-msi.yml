@@ -2,9 +2,6 @@ name: Build CatMak RustDesk x64 MSI
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - catmak-rustdesk-1.4.9
 
 permissions:
   contents: read
