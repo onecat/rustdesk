@@ -2,6 +2,9 @@ name: Build CatMak RustDesk x64 MSI
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - catmak-rustdesk-1.4.9
 
 permissions:
   contents: read
@@ -198,12 +201,12 @@ jobs:
           Pop-Location
 
           New-Item -ItemType Directory -Force ./Artifacts | Out-Null
-          Move-Item $msi.FullName ./Artifacts/rustdesk-catmak-${{ env.VERSION }}-x86_64.msi
-          Get-FileHash ./Artifacts/rustdesk-catmak-${{ env.VERSION }}-x86_64.msi -Algorithm SHA256 | Format-List
+          Move-Item $msi.FullName ./Artifacts/rustdesk-catmak-${{ env.VERSION }}-v2-x86_64.msi
+          Get-FileHash ./Artifacts/rustdesk-catmak-${{ env.VERSION }}-v2-x86_64.msi -Algorithm SHA256 | Format-List
 
       - name: Upload MSI
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: rustdesk-catmak-${{ env.VERSION }}-x86_64-msi
-          path: ./Artifacts/rustdesk-catmak-${{ env.VERSION }}-x86_64.msi
+          name: rustdesk-catmak-${{ env.VERSION }}-v2-x86_64-msi
+          path: ./Artifacts/rustdesk-catmak-${{ env.VERSION }}-v2-x86_64.msi
           if-no-files-found: error
