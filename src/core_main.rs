@@ -494,6 +494,10 @@ pub fn core_main() -> Option<Vec<String>> {
             }
             return None;
         } else if args[0] == "--config" {
+            if crate::catmak_config::server_settings_locked() {
+                println!("Server settings are locked by this build.");
+                return None;
+            }
             if args.len() == 2 && !args[0].contains("host=") {
                 if crate::platform::is_installed() && is_root() {
                     // encrypted string used in renaming exe.
