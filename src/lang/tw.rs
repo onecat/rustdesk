@@ -393,6 +393,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Accept sessions via both", "允許輸入密碼或點選接受進行連線"),
         ("Please wait for the remote side to accept your session request...", "請等待對方接受您的連線請求..."),
         ("One-time Password", "一次性密碼"),
+        ("Permanent Password", "固定密碼"),
         ("Use one-time password", "使用一次性密碼"),
         ("One-time password length", "一次性密碼長度"),
         ("Request access to your device", "請求存取您的裝置"),

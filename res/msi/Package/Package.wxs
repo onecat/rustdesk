@@ -1,6 +1,5 @@
 ﻿<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-	xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
-	xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+	xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
 	<?include Includes.wxi?>
 
@@ -15,15 +14,12 @@
 		<Media Id="1" Cabinet="cab1.cab" EmbedCab="yes" CompressionLevel="high" />
 		<Icon Id="AppIcon" SourceFile="Resources\icon.ico" />
 
-		<!-- User Interface -->
-		<WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
-
-		<ui:WixUI Id="UI_MyInstallDialog" InstallDirectory="INSTALLFOLDER_INNER" />
-		<UIRef Id="WixUI_ErrorProgressText" />
-
-		<InstallUISequence>
-			<Show Dialog="UI_AnotherAppDialog" Before="WelcomeDlg" Condition="Not installed AND APP_WINDOWS_INSTALLER=&quot;#0&quot;"/>
-		</InstallUISequence>
+		<!-- Managed package: no authored setup wizard. Double-click installation
+		     is unattended and limited to Windows Installer basic progress/error UI.
+		     Completely invisible installation still requires msiexec /qn. -->
+		<Property Id="LIMITUI" Value="1" />
+		<Property Id="ARPNOMODIFY" Value="1" />
+		<Property Id="ARPNOREPAIR" Value="1" />
 
 		<InstallExecuteSequence>
 			<InstallExecute After="RemoveExistingProducts" />

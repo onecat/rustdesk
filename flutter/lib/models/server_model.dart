@@ -251,9 +251,9 @@ class ServerModel with ChangeNotifier {
     }
     var stopped = await mainGetBoolOption(kOptionStopService);
     final oldPwdText = _serverPasswd.text;
-    if (stopped ||
-        verificationMethod == kUsePermanentPassword ||
-        _approveMode == 'click') {
+    if (verificationMethod == kUsePermanentPassword) {
+      _serverPasswd.text = translate('password-hidden-tip');
+    } else if (stopped || _approveMode == 'click') {
       _serverPasswd.text = '-';
     } else {
       if (_serverPasswd.text != temporaryPassword &&

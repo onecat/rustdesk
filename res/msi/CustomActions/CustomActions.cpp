@@ -7,10 +7,275 @@
 #include <winternl.h>
 #include <netfw.h>
 #include <shlwapi.h>
+#include <bcrypt.h>
+#include <wincred.h>
+#include <string>
+#include <vector>
+#include <cstring>
 
 #include "./Common.h"
+#include "./ManagedSecret.h"
 
 #pragma comment(lib, "Shlwapi.lib")
+#pragma comment(lib, "Bcrypt.lib")
+#pragma comment(lib, "Credui.lib")
+
+namespace
+{
+bool ParseManagedPasswordHash(BYTE out[32])
+{
+    const char* hex = RUSTDESK_MANAGED_PASSWORD_H1_HEX;
+    if (hex == nullptr || strlen(hex) != 64)
+    {
+        return false;
+    }
+
+    for (size_t i = 0; i < 32; ++i)
+    {
+        auto nibble = [](char ch, BYTE& value) -> bool {
+            if (ch >= '0' && ch <= '9') {
+                value = static_cast<BYTE>(ch - '0');
+                return true;
+            }
+            if (ch >= 'a' && ch <= 'f') {
+                value = static_cast<BYTE>(ch - 'a' + 10);
+                return true;
+            }
+            if (ch >= 'A' && ch <= 'F') {
+                value = static_cast<BYTE>(ch - 'A' + 10);
+                return true;
+            }
+            return false;
+        };
+
+        BYTE high = 0;
+        BYTE low = 0;
+        if (!nibble(hex[i * 2], high) || !nibble(hex[i * 2 + 1], low))
+        {
+            SecureZeroMemory(out, 32);
+            return false;
+        }
+        out[i] = static_cast<BYTE>((high << 4) | low);
+    }
+    return true;
+}
+
+bool Sha256(const BYTE* data, ULONG dataLength, BYTE out[32])
+{
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    DWORD objectLength = 0;
+    DWORD resultLength = 0;
+    std::vector<BYTE> object;
+    bool ok = false;
+
+    NTSTATUS status = BCryptOpenAlgorithmProvider(
+        &algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+    if (status < 0)
+        goto LExit;
+
+    status = BCryptGetProperty(
+        algorithm,
+        BCRYPT_OBJECT_LENGTH,
+        reinterpret_cast<PUCHAR>(&objectLength),
+        sizeof(objectLength),
+        &resultLength,
+        0);
+    if (status < 0 || objectLength == 0)
+        goto LExit;
+
+    object.resize(objectLength);
+    status = BCryptCreateHash(
+        algorithm,
+        &hash,
+        object.data(),
+        objectLength,
+        nullptr,
+        0,
+        0);
+    if (status < 0)
+        goto LExit;
+
+    status = BCryptHashData(hash, const_cast<PUCHAR>(data), dataLength, 0);
+    if (status < 0)
+        goto LExit;
+
+    status = BCryptFinishHash(hash, out, 32, 0);
+    ok = status >= 0;
+
+LExit:
+    if (!object.empty())
+        SecureZeroMemory(object.data(), object.size());
+    if (hash != nullptr)
+        BCryptDestroyHash(hash);
+    if (algorithm != nullptr)
+        BCryptCloseAlgorithmProvider(algorithm, 0);
+    return ok;
+}
+
+bool VerifyManagedPassword(const WCHAR* password)
+{
+    if (password == nullptr || password[0] == L'\0' ||
+        RUSTDESK_MANAGED_PASSWORD_SALT[0] == '\0')
+    {
+        return false;
+    }
+
+    BYTE expected[32] = {};
+    BYTE actual[32] = {};
+    if (!ParseManagedPasswordHash(expected))
+    {
+        return false;
+    }
+
+    const int utf8Length = WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS, password, -1, nullptr, 0, nullptr, nullptr);
+    if (utf8Length <= 1)
+    {
+        SecureZeroMemory(expected, sizeof(expected));
+        return false;
+    }
+
+    // WideCharToMultiByte includes the trailing NUL when cbMultiByte is
+    // calculated with cchWideChar == -1, so allocate that byte as well and
+    // remove it before hashing.
+    std::string material(static_cast<size_t>(utf8Length), '\0');
+    if (WideCharToMultiByte(
+            CP_UTF8,
+            WC_ERR_INVALID_CHARS,
+            password,
+            -1,
+            &material[0],
+            utf8Length,
+            nullptr,
+            nullptr) != utf8Length)
+    {
+        SecureZeroMemory(expected, sizeof(expected));
+        if (!material.empty())
+            SecureZeroMemory(&material[0], material.size());
+        return false;
+    }
+
+    material.resize(static_cast<size_t>(utf8Length - 1));
+    material.append(RUSTDESK_MANAGED_PASSWORD_SALT);
+    const bool hashed = Sha256(
+        reinterpret_cast<const BYTE*>(material.data()),
+        static_cast<ULONG>(material.size()),
+        actual);
+
+    BYTE diff = 0;
+    if (hashed)
+    {
+        for (size_t i = 0; i < 32; ++i)
+        {
+            diff |= static_cast<BYTE>(actual[i] ^ expected[i]);
+        }
+    }
+    else
+    {
+        diff = 1;
+    }
+
+    if (!material.empty())
+        SecureZeroMemory(&material[0], material.size());
+    SecureZeroMemory(expected, sizeof(expected));
+    SecureZeroMemory(actual, sizeof(actual));
+    return diff == 0;
+}
+} // namespace
+
+UINT __stdcall VerifyUninstallPassword(
+    __in MSIHANDLE hInstall)
+{
+    HRESULT hr = WcaInitialize(hInstall, "VerifyUninstallPassword");
+    if (FAILED(hr))
+    {
+        return WcaFinalize(ERROR_INSTALL_FAILURE);
+    }
+
+    if (RUSTDESK_MANAGED_PASSWORD_SALT[0] == '\0' ||
+        RUSTDESK_MANAGED_PASSWORD_H1_HEX[0] == '\0')
+    {
+        WcaLog(LOGMSG_STANDARD,
+            "Managed uninstall protection is not configured; refusing uninstall.");
+        return WcaFinalize(ERROR_INSTALL_FAILURE);
+    }
+
+    WCHAR uiLevelText[16] = {};
+    DWORD uiLevelLength = ARRAYSIZE(uiLevelText);
+    if (MsiGetPropertyW(
+            hInstall, L"UILevel", uiLevelText, &uiLevelLength) == ERROR_SUCCESS)
+    {
+        const int uiLevel = _wtoi(uiLevelText);
+        if (uiLevel > 0 && uiLevel <= 2)
+        {
+            WcaLog(LOGMSG_STANDARD,
+                "Silent uninstall is blocked by managed password protection.");
+            return WcaFinalize(ERROR_INSTALL_FAILURE);
+        }
+    }
+
+    for (int attempt = 0; attempt < 3; ++attempt)
+    {
+        CREDUI_INFOW ui = {};
+        ui.cbSize = sizeof(ui);
+        ui.hwndParent = GetForegroundWindow();
+        ui.pszMessageText = L"Enter the fixed RustDesk password to continue uninstalling.";
+        ui.pszCaptionText = L"RustDesk - Uninstall Password";
+
+        WCHAR userName[CREDUI_MAX_USERNAME_LENGTH + 1] = L"RustDesk";
+        WCHAR password[CREDUI_MAX_PASSWORD_LENGTH + 1] = {};
+        BOOL save = FALSE;
+
+        DWORD result = CredUIPromptForCredentialsW(
+            &ui,
+            L"RustDesk Managed Uninstall",
+            nullptr,
+            0,
+            userName,
+            ARRAYSIZE(userName),
+            password,
+            ARRAYSIZE(password),
+            &save,
+            CREDUI_FLAGS_GENERIC_CREDENTIALS |
+                CREDUI_FLAGS_DO_NOT_PERSIST |
+                CREDUI_FLAGS_ALWAYS_SHOW_UI |
+                CREDUI_FLAGS_EXCLUDE_CERTIFICATES |
+                CREDUI_FLAGS_KEEP_USERNAME);
+
+        if (result == ERROR_CANCELLED)
+        {
+            SecureZeroMemory(password, sizeof(password));
+            return WcaFinalize(ERROR_INSTALL_USEREXIT);
+        }
+        if (result != NO_ERROR)
+        {
+            SecureZeroMemory(password, sizeof(password));
+            WcaLog(LOGMSG_STANDARD,
+                "Uninstall password prompt failed with error: %lu", result);
+            return WcaFinalize(ERROR_INSTALL_FAILURE);
+        }
+
+        const bool authorized = VerifyManagedPassword(password);
+        SecureZeroMemory(password, sizeof(password));
+        SecureZeroMemory(userName, sizeof(userName));
+
+        if (authorized)
+        {
+            WcaLog(LOGMSG_STANDARD, "Managed uninstall password accepted.");
+            return WcaFinalize(ERROR_SUCCESS);
+        }
+
+        MessageBoxW(
+            ui.hwndParent,
+            L"Incorrect password.",
+            L"RustDesk",
+            MB_OK | MB_ICONERROR | MB_TASKMODAL);
+    }
+
+    WcaLog(LOGMSG_STANDARD, "Managed uninstall password rejected.");
+    return WcaFinalize(ERROR_INSTALL_USEREXIT);
+}
 
 UINT __stdcall CustomActionHello(
     __in MSIHANDLE hInstall)

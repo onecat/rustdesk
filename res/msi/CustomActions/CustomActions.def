@@ -2,6 +2,7 @@ LIBRARY "CustomActions"
 
 EXPORTS
     CustomActionHello
+    VerifyUninstallPassword
     RemoveRuntimeGeneratedFiles
     TerminateProcesses
     AddFirewallRules

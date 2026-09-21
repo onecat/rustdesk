@@ -1775,6 +1775,11 @@ pub fn main_set_permanent_password_with_result(password: String) -> bool {
     ui_interface::set_permanent_password_with_result(password)
 }
 
+/// Validate access to managed settings without exposing the fixed password.
+pub fn main_verify_managed_password(password: String) -> bool {
+    crate::managed_config::verify_fixed_password(&password)
+}
+
 pub fn main_get_fingerprint() -> String {
     get_fingerprint()
 }
