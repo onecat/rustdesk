@@ -172,7 +172,7 @@ fn start_auto_update_check_(rx_msg: Receiver<UpdateMsg>) {
                 if last_check_time.elapsed() < MIN_INTERVAL {
                     continue;
                 }
-                match check_update(matches!(recv_res, Ok(UpdateMsg::CheckUpdate))) {
+                match check_update(matches!(&recv_res, Ok(UpdateMsg::CheckUpdate))) {
                     Ok(CheckOutcome::Done) => {
                         last_check_time = Instant::now();
                         check_interval = normal_check_interval();
@@ -492,7 +492,7 @@ fn verify_managed_manifest(body: &str) -> ResultType<ManagedManifestPayload> {
     )
     .map_err(|_| hbb_common::anyhow::anyhow!("Invalid managed manifest signature encoding"))?;
     let public_key_bytes = hbb_common::sodiumoxide::base64::decode(
-        crate::managed_config::MANAGED_UPDATE_PUBLIC_KEY_BASE64,
+        crate::managed_config::managed_update_public_key_base64(),
         hbb_common::sodiumoxide::base64::Variant::Original,
     )
     .map_err(|_| hbb_common::anyhow::anyhow!("Invalid managed update public key encoding"))?;
