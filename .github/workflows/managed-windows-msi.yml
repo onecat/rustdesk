@@ -22,6 +22,7 @@ env:
   VERSION: "1.4.9"
   MANAGED_VERSION: "1.4.9-r5"
   MANAGED_BUILD: "1005"
+  MSI_REVISION_BASE: "30000000"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
 
 jobs:
@@ -284,8 +285,13 @@ jobs:
           "@
           Set-Content -Path ./res/msi/CustomActions/ManagedSecret.h -Value $managedSecretHeader -Encoding ascii
 
+          $msiRevision = [int64]$env:MSI_REVISION_BASE + [int64]$env:MANAGED_BUILD
+          if ($msiRevision -le 29833134) {
+            throw "MSI revision $msiRevision must be greater than r4 revision 29833134"
+          }
+
           Push-Location ./res/msi
-          python preprocess.py --arp --revision-version $env:MANAGED_BUILD -d ../../rustdesk
+          python preprocess.py --arp --revision-version $msiRevision -d ../../rustdesk
           nuget restore msi.sln
           msbuild msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
           $msi = Get-ChildItem ./Package/bin/*/Release/en-us/Package.msi | Select-Object -First 1
@@ -305,6 +311,8 @@ jobs:
             version = "${{ env.MANAGED_VERSION }}"
             build = [int64]"${{ env.MANAGED_BUILD }}"
             source_sha = "${{ github.sha }}"
+            msi_revision = $msiRevision
+            msi_product_version = "${{ env.VERSION }}.$msiRevision"
             msi_file = $artifactName
             sha256 = $hash
             size = $size
