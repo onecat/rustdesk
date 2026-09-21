@@ -56,6 +56,23 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Validate Managed CI helper syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "./scripts/managed_ci_download.ps1").Path,
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "managed_ci_download.ps1 contains PowerShell syntax errors"
+          }
+          python -m py_compile ./scripts/managed_vcpkg_asset.py
+          python -m py_compile ./scripts/managed_update_manifest.py
+
       - name: Configure verified vcpkg asset fallback
         shell: pwsh
         run: |
