@@ -1,0 +1,76 @@
+name: Publish CatMak RustDesk 1.4.9 V2 Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - catmak-rustdesk-1.4.9
+    paths:
+      - .github/workflows/publish-catmak-v2-release.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: publish-v2-release
+    runs-on: ubuntu-latest
+
+    env:
+      RELEASE_TAG: catmak-1.4.9-v2
+      RELEASE_NAME: CatMak RustDesk 1.4.9 V2
+      SOURCE_RUN_ID: "35503866341"
+      ARTIFACT_NAME: rustdesk-catmak-1.4.9-v2-x86_64-msi
+      MSI_NAME: rustdesk-catmak-1.4.9-v2-x86_64.msi
+      TARGET_COMMIT: 4cfac87ae3f441885214f2a648600465cf106841
+
+    steps:
+      - name: Download exact V2 artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p release-assets
+          gh run download "$SOURCE_RUN_ID"             --repo "${{ github.repository }}"             --name "$ARTIFACT_NAME"             --dir release-assets
+
+          test -f "release-assets/$MSI_NAME"
+          ls -lh release-assets
+
+      - name: Generate SHA-256 checksum
+        run: |
+          cd release-assets
+          sha256sum "$MSI_NAME" > "$MSI_NAME.sha256"
+          cat "$MSI_NAME.sha256"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_NAME }}
+          target_commitish: ${{ env.TARGET_COMMIT }}
+          draft: false
+          prerelease: false
+          body: |
+            CatMak 定制版 RustDesk 1.4.9 V2。
+
+            基于官方 RustDesk 1.4.9 稳定版，Windows x64 MSI。
+
+            主要定制：
+            - 固定并锁定私有 ID / Relay / API Server 配置
+            - 隐藏服务器配置入口并阻止 CLI / EXE 文件名覆盖
+            - 禁止 RustDesk 公共版本检查和自动更新
+            - 禁止 LAN Discovery，允许 Direct IP 访问
+            - Windows 服务自动启用并随系统启动
+            - 固定永久密码通过 GitHub Secret 在构建时注入，不提交到公开仓库
+            - 不创建桌面快捷方式
+            - 双击 MSI 无需安装向导交互；Windows Installer 系统进度/UAC 仍可能显示
+            - 隐藏账户、打印机、关于页面
+            - 修正固定密码状态显示
+
+            完全静默安装可使用：
+            `msiexec /i rustdesk-catmak-1.4.9-v2-x86_64.msi /qn`
+
+            此构建未配置 Windows 代码签名证书。
+          files: |
+            release-assets/${{ env.MSI_NAME }}
+            release-assets/${{ env.MSI_NAME }}.sha256
+          fail_on_unmatched_files: true
