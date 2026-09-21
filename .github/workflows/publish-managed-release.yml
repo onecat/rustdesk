@@ -1,0 +1,78 @@
+name: Publish RustDesk Managed Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Managed MSI build run ID
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download exact build artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: rustdesk-managed-*-x86_64-msi
+          path: release-input
+          merge-multiple: true
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate artifact and export release metadata
+        shell: pwsh
+        run: |
+          $metadataPath = "./release-input/managed-build.json"
+          if (-not (Test-Path $metadataPath)) {
+            throw "managed-build.json was not found in run ${{ inputs.run_id }}"
+          }
+
+          $meta = Get-Content $metadataPath -Raw | ConvertFrom-Json
+          $msiPath = Join-Path "./release-input" $meta.msi_file
+          if (-not (Test-Path $msiPath)) {
+            throw "MSI listed in managed-build.json was not found: $($meta.msi_file)"
+          }
+
+          $actualHash = (Get-FileHash $msiPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $actualSize = (Get-Item $msiPath).Length
+          if ($actualHash -ne $meta.sha256.ToLowerInvariant()) {
+            throw "MSI SHA256 mismatch"
+          }
+          if ($actualSize -ne [int64]$meta.size) {
+            throw "MSI size mismatch"
+          }
+
+          $tag = "managed-$($meta.version)"
+          "$actualHash  $($meta.msi_file)" | Set-Content "$msiPath.sha256" -Encoding ascii
+
+          Add-Content $env:GITHUB_ENV "MANAGED_VERSION=$($meta.version)"
+          Add-Content $env:GITHUB_ENV "MANAGED_BUILD=$($meta.build)"
+          Add-Content $env:GITHUB_ENV "MANAGED_SOURCE_SHA=$($meta.source_sha)"
+          Add-Content $env:GITHUB_ENV "MANAGED_MSI_FILE=$($meta.msi_file)"
+          Add-Content $env:GITHUB_ENV "MANAGED_MSI_PATH=$msiPath"
+          Add-Content $env:GITHUB_ENV "MANAGED_RELEASE_TAG=$tag"
+          Add-Content $env:GITHUB_ENV "MANAGED_SHA256=$actualHash"
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$MANAGED_RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$MANAGED_RELEASE_TAG" \
+              "$MANAGED_MSI_PATH" "$MANAGED_MSI_PATH.sha256" \
+              --clobber --repo "${{ github.repository }}"
+          else
+            gh release create "$MANAGED_RELEASE_TAG" \
+              "$MANAGED_MSI_PATH" "$MANAGED_MSI_PATH.sha256" \
+              --repo "${{ github.repository }}" \
+              --title "RustDesk Managed $MANAGED_VERSION" \
+              --notes "Managed build $MANAGED_BUILD\n\nSource commit: $MANAGED_SOURCE_SHA\n\nSHA-256: $MANAGED_SHA256"
+          fi
