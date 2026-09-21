@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: rustdesk-managed-stable-reconcile
+  cancel-in-progress: false
+
 jobs:
   reconcile:
     if: github.event_name == 'workflow_dispatch' || (startsWith(github.event.release.tag_name, 'managed-') && github.event.release.tag_name != 'managed-update')
