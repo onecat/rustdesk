@@ -2,6 +2,9 @@ name: Build RustDesk Managed x64 MSI
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - rustdesk-managed-1.4.9-r6
 
 concurrency:
   group: rustdesk-managed-stable-release
