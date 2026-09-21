@@ -1,0 +1,59 @@
+name: Publish Managed r4 Baseline
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish-r4:
+    if: github.event.head_commit.message == 'Publish Managed r4 baseline'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download exact r4 artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: rustdesk-managed-1.4.9-r4-x86_64-msi
+          path: release-input
+          merge-multiple: true
+          run-id: 35588130076
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate r4 artifact
+        shell: pwsh
+        run: |
+          $meta = Get-Content "./release-input/managed-build.json" -Raw | ConvertFrom-Json
+          if ($meta.version -ne "1.4.9-r4" -or [int64]$meta.build -ne 1004) {
+            throw "Unexpected r4 metadata"
+          }
+          $msiPath = Join-Path "./release-input" $meta.msi_file
+          if (-not (Test-Path $msiPath)) { throw "r4 MSI missing" }
+          $hash = (Get-FileHash $msiPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $size = (Get-Item $msiPath).Length
+          if ($hash -ne $meta.sha256.ToLowerInvariant()) { throw "r4 SHA256 mismatch" }
+          if ($size -ne [int64]$meta.size) { throw "r4 size mismatch" }
+          "$hash  $($meta.msi_file)" | Set-Content "$msiPath.sha256" -Encoding ascii
+          Add-Content $env:GITHUB_ENV "MSI_PATH=$msiPath"
+          Add-Content $env:GITHUB_ENV "MSI_HASH=$hash"
+          Add-Content $env:GITHUB_ENV "SOURCE_SHA=$($meta.source_sha)"
+
+      - name: Publish r4 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view managed-1.4.9-r4 --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "managed-1.4.9-r4 already exists; leaving it unchanged"
+            exit 0
+          fi
+          gh release create managed-1.4.9-r4 \
+            "$MSI_PATH" "$MSI_PATH.sha256" "./release-input/managed-build.json" \
+            --repo "${{ github.repository }}" \
+            --target "$SOURCE_SHA" \
+            --title "RustDesk Managed 1.4.9-r4" \
+            --notes "Managed build 1004. Baseline release for Managed automatic updates. SHA-256: $MSI_HASH"
