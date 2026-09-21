@@ -4,7 +4,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  actions: read
+  contents: write
 
 env:
   SCITER_RUST_VERSION: "1.75"
@@ -251,3 +252,106 @@ jobs:
             ./Artifacts/rustdesk-managed-${{ env.MANAGED_VERSION }}-x86_64.msi
             ./Artifacts/managed-build.json
           if-no-files-found: error
+
+  publish-stable:
+    name: publish-stable
+    needs: [build-x64-msi]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout exact build source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          path: source
+
+      - name: Download exact MSI artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: rustdesk-managed-${{ env.MANAGED_VERSION }}-x86_64-msi
+          path: release-input
+
+      - name: Validate release artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, pathlib
+          root = pathlib.Path("release-input")
+          meta = json.loads((root / "managed-build.json").read_text(encoding="utf-8-sig"))
+          expected_version = os.environ["MANAGED_VERSION"]
+          expected_build = int(os.environ["MANAGED_BUILD"])
+          if meta.get("version") != expected_version:
+              raise SystemExit("managed-build.json version mismatch")
+          if int(meta.get("build", -1)) != expected_build:
+              raise SystemExit("managed-build.json build mismatch")
+          msi = root / str(meta.get("msi_file", ""))
+          if not msi.is_file():
+              raise SystemExit("MSI listed in managed-build.json is missing")
+          data = msi.read_bytes()
+          digest = hashlib.sha256(data).hexdigest()
+          if digest.lower() != str(meta.get("sha256", "")).lower():
+              raise SystemExit("MSI SHA256 mismatch")
+          if len(data) != int(meta.get("size", -1)):
+              raise SystemExit("MSI size mismatch")
+          source_sha = str(meta.get("source_sha", ""))
+          if len(source_sha) != 40 or any(ch not in "0123456789abcdefABCDEF" for ch in source_sha):
+              raise SystemExit("source_sha is invalid")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
+              fh.write(f"MSI_FILE={msi.name}\n")
+              fh.write(f"MSI_SHA256={digest}\n")
+              fh.write(f"MSI_SIZE={len(data)}\n")
+              fh.write(f"SOURCE_SHA={source_sha}\n")
+          PY
+          printf '%s  %s\n' "$MSI_SHA256" "$MSI_FILE" > "release-input/$MSI_FILE.sha256"
+
+      - name: Publish immutable Managed Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="managed-${MANAGED_VERSION}"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $TAG already exists. Increment MANAGED_VERSION/MANAGED_BUILD instead of replacing it."
+            exit 1
+          fi
+          gh release create "$TAG" \
+            "release-input/$MSI_FILE" \
+            "release-input/$MSI_FILE.sha256" \
+            "release-input/managed-build.json" \
+            --repo "${{ github.repository }}" \
+            --target "$SOURCE_SHA" \
+            --title "RustDesk Managed ${MANAGED_VERSION}" \
+            --notes "Managed build ${MANAGED_BUILD}. Stable release. SHA-256: $MSI_SHA256"
+
+      - name: Generate stable update manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="managed-${MANAGED_VERSION}"
+          URL="https://github.com/${{ github.repository }}/releases/download/$TAG/$MSI_FILE"
+          python source/scripts/managed_update_manifest.py \
+            --msi "release-input/$MSI_FILE" \
+            --version "${MANAGED_VERSION}" \
+            --build "${MANAGED_BUILD}" \
+            --channel stable \
+            --url "$URL" \
+            --rollout 100 \
+            --output stable.json
+          cat stable.json
+
+      - name: Publish stable update manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view managed-update --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload managed-update stable.json --clobber --repo "${{ github.repository }}"
+          else
+            gh release create managed-update stable.json \
+              --repo "${{ github.repository }}" \
+              --target "$SOURCE_SHA" \
+              --title "RustDesk Managed Update Manifest" \
+              --notes "Stable update manifest used by RustDesk Managed clients."
+          fi
+
