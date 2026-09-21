@@ -55,6 +55,14 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Configure verified vcpkg asset fallback
+        shell: pwsh
+        run: |
+          $script = (Resolve-Path "./scripts/managed_vcpkg_asset.py").Path.Replace("\\", "/")
+          $value = "clear;x-script,python $script {url} {sha512} {dst};x-block-origin"
+          Add-Content -Path $env:GITHUB_ENV -Value "X_VCPKG_ASSET_SOURCES=$value"
+          Write-Host "Configured verified vcpkg asset downloader."
+
       - name: Validate Managed version metadata
         shell: pwsh
         run: |
@@ -277,7 +285,7 @@ jobs:
           Set-Content -Path ./res/msi/CustomActions/ManagedSecret.h -Value $managedSecretHeader -Encoding ascii
 
           Push-Location ./res/msi
-          python preprocess.py --arp -d ../../rustdesk
+          python preprocess.py --arp --revision-version $env:MANAGED_BUILD -d ../../rustdesk
           nuget restore msi.sln
           msbuild msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
           $msi = Get-ChildItem ./Package/bin/*/Release/en-us/Package.msi | Select-Object -First 1
