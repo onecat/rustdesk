@@ -21,7 +21,7 @@ function Invoke-OneDownload {
             Remove-Item -Force $Destination -ErrorAction SilentlyContinue
         }
 
-        Write-Host "Download attempt $attempt: $CandidateUrl"
+        Write-Host "Download attempt ${attempt}: $CandidateUrl"
         & curl.exe --fail --location --retry 2 --retry-all-errors --retry-delay 3 --connect-timeout 15 --max-time 900 --output $Destination $CandidateUrl
 
         if ($LASTEXITCODE -eq 0 -and (Test-Path $Destination)) {
