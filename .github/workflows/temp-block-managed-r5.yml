@@ -1,4 +1,4 @@
-name: Block Invalid Managed r5 Release
+name: Remove Managed r5 Blocker
 
 on:
   push:
@@ -9,22 +9,16 @@ permissions:
   contents: write
 
 jobs:
-  block:
-    if: github.event.head_commit.message == 'Block invalid Managed r5 release'
+  cleanup:
+    if: github.event.head_commit.message == 'Remove invalid Managed r5 blocker'
     runs-on: ubuntu-22.04
     steps:
-      - name: Create draft r5 blocker
+      - name: Delete temporary draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           if gh release view managed-1.4.9-r5 --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "r5 release already exists; no blocker needed."
-            exit 0
+            gh release delete managed-1.4.9-r5 --repo "${{ github.repository }}" --yes --cleanup-tag
           fi
-          gh release create managed-1.4.9-r5 \
-            --repo "${{ github.repository }}" \
-            --draft \
-            --title "TEMPORARY BLOCKER - DO NOT USE" \
-            --notes "Temporary draft used to prevent publication of an invalid MSI revision during CI review."
