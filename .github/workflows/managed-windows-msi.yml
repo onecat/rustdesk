@@ -401,8 +401,11 @@ jobs:
               fh.write(f"MSI_FILE={msi.name}\n")
               fh.write(f"MSI_SHA256={digest}\n")
               fh.write(f"SOURCE_SHA={source_sha}\n")
+          (root / f"{msi.name}.sha256").write_text(
+              f"{digest}  {msi.name}\n",
+              encoding="ascii",
+          )
           PY
-          printf '%s  %s\n' "$MSI_SHA256" "$MSI_FILE" > "release-input/$MSI_FILE.sha256"
 
       - name: Publish immutable Managed Release
         env:
