@@ -1,5 +1,33 @@
 use hbb_common::config::{self, keys, Config};
 
+pub(crate) const MANAGED_VERSION: &str = "1.4.9-r4";
+pub(crate) const MANAGED_BUILD: u64 = 1004;
+pub(crate) const MANAGED_UPDATE_MANIFEST_BASE: &str =
+    "https://github.com/onecat/rustdesk/releases/download/managed-update";
+pub(crate) const MANAGED_GITHUB_FALLBACK_PREFIX: &str = "https://gh.catmak.name/";
+pub(crate) const MANAGED_UPDATE_PUBLIC_KEY_BASE64: &str =
+    "UJXvai38PWGcYzfcs0SbIjFwndxWFZxAfH7PSa62BfU=";
+
+pub(crate) fn managed_updates_enabled() -> bool {
+    cfg!(target_os = "windows")
+}
+
+pub(crate) fn managed_update_channel() -> &'static str {
+    match option_env!("RUSTDESK_MANAGED_UPDATE_CHANNEL") {
+        Some("test") => "test",
+        _ => "stable",
+    }
+}
+
+pub(crate) fn managed_update_manifest_url() -> String {
+    format!(
+        "{}/{}.json",
+        MANAGED_UPDATE_MANIFEST_BASE,
+        managed_update_channel()
+    )
+}
+
+
 /// This build intentionally locks its private-server policy.
 pub(crate) fn server_settings_locked() -> bool {
     true
