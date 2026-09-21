@@ -70,16 +70,7 @@ jobs:
             $errors | ForEach-Object { Write-Error $_.Message }
             throw "managed_ci_download.ps1 contains PowerShell syntax errors"
           }
-          python -m py_compile ./scripts/managed_vcpkg_asset.py
           python -m py_compile ./scripts/managed_update_manifest.py
-
-      - name: Configure verified vcpkg asset fallback
-        shell: pwsh
-        run: |
-          $script = (Resolve-Path "./scripts/managed_vcpkg_asset.py").Path.Replace("\\", "/")
-          $value = "clear;x-script,python $script {url} {sha512} {dst};x-block-origin"
-          Add-Content -Path $env:GITHUB_ENV -Value "X_VCPKG_ASSET_SOURCES=$value"
-          Write-Host "Configured verified vcpkg asset downloader."
 
       - name: Validate Managed version metadata
         shell: pwsh
@@ -188,6 +179,22 @@ jobs:
 
           & (Join-Path $root "vcpkg.exe") version --disable-metrics
           if ($LASTEXITCODE -ne 0) { throw "Pinned vcpkg tool failed to start." }
+
+      - name: Prefetch flaky GitHub vcpkg assets
+        shell: pwsh
+        run: |
+          $downloads = Join-Path $env:VCPKG_ROOT "downloads"
+          New-Item -ItemType Directory -Force $downloads | Out-Null
+
+          ./scripts/managed_ci_download.ps1 `
+            -Url "https://github.com/lu-zero/mfx_dispatch/commit/d6241243f85a0d947bdfe813006686a930edef24.patch?full_index=1" `
+            -OutFile (Join-Path $downloads "fix-missing-cstdint-import-d6241243f85a0d947bdfe813006686a930edef24.patch") `
+            -Sha512 "5d2ffc4ec2ba0e5859d01d2e072f75436ebc3e62e0f6580b5bb8b9f82fe588e7558a46a1fdfa0297a782c0eeb8f50322258d0dd9e41d927cc9be496727b61e44"
+
+          ./scripts/managed_ci_download.ps1 `
+            -Url "https://github.com/lu-zero/mfx_dispatch/archive/1.35.1.tar.gz" `
+            -OutFile (Join-Path $downloads "lu-zero-mfx_dispatch-1.35.1.tar.gz") `
+            -Sha512 "12517338342d3e653043a57e290eb9cffd190aede0c3a3948956f1c7f12f0ea859361cf3e534ab066b96b1c211f68409c67ef21fd6d76b68cc31daef541941b0"
 
       - name: Install vcpkg dependencies with retry
         shell: bash
