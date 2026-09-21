@@ -20,8 +20,8 @@ env:
   VCPKG_TOOL_URL: "https://github.com/microsoft/vcpkg-tool/releases/download/2025-07-21/vcpkg.exe"
   VCPKG_TOOL_SHA256: "df8a0cba47ec0aff33ea377b66a5eef7397f8455a082a4dfad881fcc280e096d"
   VERSION: "1.4.9"
-  MANAGED_VERSION: "1.4.9-r5"
-  MANAGED_BUILD: "1005"
+  MANAGED_VERSION: "1.4.9-r7"
+  MANAGED_BUILD: "1007"
   MSI_REVISION_BASE: "30000000"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
 
