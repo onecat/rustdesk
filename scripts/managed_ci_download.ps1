@@ -5,7 +5,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$OutFile,
 
-    [string]$Sha256 = ""
+    [string]$Sha256 = "",
+
+    [string]$Sha512 = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -51,12 +53,25 @@ if (-not $ok) {
     throw "Failed to download $Url from both primary and fallback sources."
 }
 
+if (-not [string]::IsNullOrWhiteSpace($Sha256) -and -not [string]::IsNullOrWhiteSpace($Sha512)) {
+    throw "Specify only one of Sha256 or Sha512."
+}
+
 if (-not [string]::IsNullOrWhiteSpace($Sha256)) {
     $actual = (Get-FileHash -Algorithm SHA256 -Path $OutFile).Hash.ToLowerInvariant()
     $expected = $Sha256.Trim().ToLowerInvariant()
     if ($actual -ne $expected) {
         Remove-Item -Force $OutFile -ErrorAction SilentlyContinue
         throw "SHA-256 mismatch for $Url. Expected $expected but got $actual."
+    }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($Sha512)) {
+    $actual = (Get-FileHash -Algorithm SHA512 -Path $OutFile).Hash.ToLowerInvariant()
+    $expected = $Sha512.Trim().ToLowerInvariant()
+    if ($actual -ne $expected) {
+        Remove-Item -Force $OutFile -ErrorAction SilentlyContinue
+        throw "SHA-512 mismatch for $Url. Expected $expected but got $actual."
     }
 }
 
