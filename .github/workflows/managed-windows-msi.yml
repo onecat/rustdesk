@@ -2,6 +2,9 @@ name: Build RustDesk Managed x64 MSI
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - rustdesk-managed-1.4.9-v4-preflight
 
 permissions:
   contents: read
@@ -151,7 +154,7 @@ jobs:
       - name: Prepare Managed update signing public key
         shell: pwsh
         env:
-          RUSTDESK_UPDATE_SIGNING_SEED: ${{ secrets.RUSTDESK_UPDATE_SIGNING_SEED }}
+          RUSTDESK_UPDATE_SIGNING_SEED: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
         run: |
           if ([string]::IsNullOrEmpty($env:RUSTDESK_UPDATE_SIGNING_SEED)) {
             throw "Repository secret RUSTDESK_UPDATE_SIGNING_SEED is required"
@@ -247,7 +250,7 @@ jobs:
       - name: Upload MSI
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: rustdesk-managed-${{ env.MANAGED_VERSION }}-x86_64-msi
+          name: preflight-rustdesk-managed-${{ env.MANAGED_VERSION }}-x86_64-msi
           path: |
             ./Artifacts/rustdesk-managed-${{ env.MANAGED_VERSION }}-x86_64.msi
             ./Artifacts/managed-build.json
