@@ -1,0 +1,80 @@
+name: Recover Managed r5 Release
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  recover:
+    if: github.event.head_commit.message == 'Recover Managed r5 release'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download exact successful r5 artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: rustdesk-managed-1.4.9-r5-x86_64-msi
+          path: release-input
+          run-id: 35624947943
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate r5 artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, pathlib
+          root = pathlib.Path("release-input")
+          meta = json.loads((root / "managed-build.json").read_text(encoding="utf-8-sig"))
+          if meta.get("version") != "1.4.9-r5":
+              raise SystemExit("Unexpected version")
+          if int(meta.get("build", -1)) != 1005:
+              raise SystemExit("Unexpected build")
+          if int(meta.get("msi_revision", -1)) != 30001005:
+              raise SystemExit("Unexpected MSI revision")
+          if str(meta.get("msi_product_version", "")) != "1.4.9.30001005":
+              raise SystemExit("Unexpected MSI ProductVersion")
+          msi = root / str(meta.get("msi_file", ""))
+          if msi.name != "rustdesk-managed-1.4.9-r5-x86_64.msi" or not msi.is_file():
+              raise SystemExit("r5 MSI missing")
+          data = msi.read_bytes()
+          digest = hashlib.sha256(data).hexdigest()
+          if digest.lower() != str(meta.get("sha256", "")).lower():
+              raise SystemExit("r5 SHA256 mismatch")
+          if len(data) != int(meta.get("size", -1)):
+              raise SystemExit("r5 size mismatch")
+          source_sha = str(meta.get("source_sha", ""))
+          if len(source_sha) != 40 or any(c not in "0123456789abcdefABCDEF" for c in source_sha):
+              raise SystemExit("Invalid source SHA")
+          (root / f"{msi.name}.sha256").write_text(
+              f"{digest}  {msi.name}\n",
+              encoding="ascii",
+          )
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
+              fh.write(f"MSI_FILE={msi.name}\n")
+              fh.write(f"MSI_SHA256={digest}\n")
+              fh.write(f"SOURCE_SHA={source_sha}\n")
+          PY
+
+      - name: Publish r5 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view managed-1.4.9-r5 --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "managed-1.4.9-r5 already exists; refusing to replace it."
+            exit 1
+          fi
+          gh release create managed-1.4.9-r5 \
+            "release-input/$MSI_FILE" \
+            "release-input/$MSI_FILE.sha256" \
+            "release-input/managed-build.json" \
+            --repo "${{ github.repository }}" \
+            --target "$SOURCE_SHA" \
+            --title "RustDesk Managed 1.4.9-r5" \
+            --notes "Managed build 1005. Stable release. SHA-256: $MSI_SHA256"
