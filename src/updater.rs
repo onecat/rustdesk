@@ -37,6 +37,7 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(60 * 30);
 const MIN_INTERVAL: Duration = Duration::from_secs(60 * 10);
 const MANAGED_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const MANAGED_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 5);
+const MANAGED_MAX_MANIFEST_BYTES: usize = 64 * 1024;
 const MANAGED_REPO_RELEASE_PREFIX: &str =
     "https://github.com/onecat/rustdesk/releases/download/";
 
@@ -432,9 +433,10 @@ fn ordered_sources(primary: &str, prefer_fallback: bool) -> Vec<(String, bool)> 
 
 #[cfg(target_os = "windows")]
 fn should_try_fallback(status: reqwest::StatusCode) -> bool {
-    status == reqwest::StatusCode::REQUEST_TIMEOUT
-        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
-        || status.is_server_error()
+    // A real 404 normally means the release/asset has not been published.
+    // Other failures can be caused by regional connectivity, throttling,
+    // filtering or an intermediary, so try the alternate source.
+    status != reqwest::StatusCode::NOT_FOUND
 }
 
 #[cfg(target_os = "windows")]
@@ -449,7 +451,15 @@ fn fetch_text_with_fallback(primary: &str, prefer_fallback: bool) -> ResultType<
         let client = strict_update_client()?;
         match client.get(url).send() {
             Ok(response) if response.status().is_success() => {
-                let text = response.text()?;
+                let bytes = response.bytes()?;
+                if bytes.len() > MANAGED_MAX_MANIFEST_BYTES {
+                    bail!(
+                        "Managed update manifest is too large: {} bytes",
+                        bytes.len()
+                    );
+                }
+                let text = String::from_utf8(bytes.to_vec())
+                    .map_err(|_| hbb_common::anyhow::anyhow!("Managed update manifest is not UTF-8"))?;
                 return Ok((text, *is_fallback));
             }
             Ok(response) => {
@@ -485,6 +495,8 @@ fn fetch_text_with_fallback(primary: &str, prefer_fallback: bool) -> ResultType<
 
 #[cfg(target_os = "windows")]
 fn verify_managed_manifest(body: &str) -> ResultType<ManagedManifestPayload> {
+    hbb_common::sodiumoxide::init()
+        .map_err(|_| hbb_common::anyhow::anyhow!("Failed to initialize update signature verifier"))?;
     let wrapper: ManagedSignedManifest = serde_json::from_str(body)?;
     let signed = hbb_common::sodiumoxide::base64::decode(
         &wrapper.signed,
@@ -693,8 +705,23 @@ fn download_package_from_source(url: &str, part_path: &Path, expected_size: u64)
         bail!("Managed update package returned HTTP {} from {}", status, url);
     }
 
-    let append = offset > 0 && status == reqwest::StatusCode::PARTIAL_CONTENT;
-    if offset > 0 && !append {
+    let mut append = offset > 0 && status == reqwest::StatusCode::PARTIAL_CONTENT;
+    if append {
+        let expected_prefix = format!("bytes {}-", offset);
+        let content_range_ok = response
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.starts_with(&expected_prefix))
+            .unwrap_or(false);
+        if !content_range_ok {
+            log::warn!(
+                "Managed update source returned an unexpected Content-Range; restarting download."
+            );
+            append = false;
+            offset = 0;
+        }
+    } else if offset > 0 {
         // Server ignored Range. Restart safely from byte zero.
         offset = 0;
     }
