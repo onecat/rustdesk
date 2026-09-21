@@ -1,0 +1,133 @@
+name: Reconcile RustDesk Managed Stable
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    if: github.event_name == 'workflow_dispatch' || (startsWith(github.event.release.tag_name, 'managed-') && github.event.release.tag_name != 'managed-update')
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Select highest Managed build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import datetime as dt
+          import json
+          import os
+          import pathlib
+          import subprocess
+          import tempfile
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          releases = json.loads(subprocess.check_output([
+              "gh", "release", "list",
+              "--repo", repo,
+              "--limit", "100",
+              "--json", "tagName,isDraft,isPrerelease",
+          ], text=True))
+
+          best = None
+          for release in releases:
+              tag = str(release.get("tagName", ""))
+              if (
+                  release.get("isDraft")
+                  or release.get("isPrerelease")
+                  or tag == "managed-update"
+                  or not tag.startswith("managed-")
+              ):
+                  continue
+
+              with tempfile.TemporaryDirectory() as tmp:
+                  proc = subprocess.run([
+                      "gh", "release", "download", tag,
+                      "--repo", repo,
+                      "--pattern", "managed-build.json",
+                      "--dir", tmp,
+                  ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                  if proc.returncode != 0:
+                      continue
+
+                  path = pathlib.Path(tmp) / "managed-build.json"
+                  if not path.is_file():
+                      continue
+                  try:
+                      meta = json.loads(path.read_text(encoding="utf-8-sig"))
+                      version = str(meta["version"])
+                      build = int(meta["build"])
+                      msi_file = str(meta["msi_file"])
+                      sha256 = str(meta["sha256"]).lower()
+                      size = int(meta["size"])
+                  except Exception:
+                      continue
+
+                  if tag != f"managed-{version}":
+                      continue
+                  if build <= 0 or size <= 0:
+                      continue
+                  if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
+                      continue
+                  if not msi_file.endswith(".msi") or "/" in msi_file or "\\" in msi_file:
+                      continue
+
+                  candidate = {
+                      "version": version,
+                      "build": build,
+                      "msi_file": msi_file,
+                      "sha256": sha256,
+                      "size": size,
+                      "tag": tag,
+                  }
+                  if best is None or candidate["build"] > best["build"]:
+                      best = candidate
+
+          if best is None:
+              raise SystemExit("No valid RustDesk Managed releases with managed-build.json were found")
+
+          manifest = {
+              "schema": 1,
+              "channel": "stable",
+              "version": best["version"],
+              "build": best["build"],
+              "published_at": dt.datetime.now(dt.timezone.utc)
+                  .replace(microsecond=0)
+                  .isoformat()
+                  .replace("+00:00", "Z"),
+              "package": {
+                  "url": f"https://github.com/{repo}/releases/download/{best['tag']}/{best['msi_file']}",
+                  "sha256": best["sha256"],
+                  "size": best["size"],
+              },
+              "rollout": 100,
+              "mandatory": False,
+          }
+
+          pathlib.Path("stable.json").write_text(
+              json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(manifest, indent=2))
+          PY
+
+      - name: Publish reconciled stable manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view managed-update --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload managed-update stable.json --clobber --repo "${{ github.repository }}"
+          else
+            gh release create managed-update stable.json \
+              --repo "${{ github.repository }}" \
+              --title "RustDesk Managed Update Manifest" \
+              --notes "Stable update manifest automatically tracks the highest published Managed build."
+          fi
