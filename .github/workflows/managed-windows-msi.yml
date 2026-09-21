@@ -47,6 +47,21 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Validate Managed version metadata
+        shell: pwsh
+        run: |
+          $source = Get-Content ./src/managed_config.rs -Raw
+          $versionPattern = 'MANAGED_VERSION:\s*&str\s*=\s*"([^"]+)"'
+          $buildPattern = 'MANAGED_BUILD:\s*u64\s*=\s*([0-9]+)'
+          $versionMatch = [regex]::Match($source, $versionPattern)
+          $buildMatch = [regex]::Match($source, $buildPattern)
+          if (-not $versionMatch.Success -or $versionMatch.Groups[1].Value -ne "${{ env.MANAGED_VERSION }}") {
+            throw "MANAGED_VERSION in source does not match workflow metadata"
+          }
+          if (-not $buildMatch.Success -or $buildMatch.Groups[1].Value -ne "${{ env.MANAGED_BUILD }}") {
+            throw "MANAGED_BUILD in source does not match workflow metadata"
+          }
+
       - name: Restore bridge files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
