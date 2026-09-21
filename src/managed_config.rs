@@ -14,10 +14,12 @@ pub(crate) fn managed_updates_enabled() -> bool {
     cfg!(target_os = "windows") && !managed_update_public_key_base64().is_empty()
 }
 
-pub(crate) fn managed_update_channel() -> &'static str {
-    match option_env!("RUSTDESK_MANAGED_UPDATE_CHANNEL") {
-        Some("test") => "test",
-        _ => "stable",
+pub(crate) fn managed_update_channel() -> String {
+    let configured = Config::get_option("managed-update-channel");
+    if configured.eq_ignore_ascii_case("test") {
+        "test".to_owned()
+    } else {
+        "stable".to_owned()
     }
 }
 
