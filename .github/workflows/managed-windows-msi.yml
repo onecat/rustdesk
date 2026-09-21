@@ -3,6 +3,10 @@ name: Build RustDesk Managed x64 MSI
 on:
   workflow_dispatch:
 
+concurrency:
+  group: rustdesk-managed-stable-release
+  cancel-in-progress: false
+
 permissions:
   actions: read
   contents: write
@@ -12,9 +16,13 @@ env:
   LLVM_VERSION: "15.0.6"
   FLUTTER_VERSION: "3.24.5"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+  VCPKG_ROOT: "C:\\vcpkg"
+  VCPKG_TOOL_URL: "https://github.com/microsoft/vcpkg-tool/releases/download/2025-07-21/vcpkg.exe"
+  VCPKG_TOOL_SHA256: "df8a0cba47ec0aff33ea377b66a5eef7397f8455a082a4dfad881fcc280e096d"
   VERSION: "1.4.9"
   MANAGED_VERSION: "1.4.9-r5"
   MANAGED_BUILD: "1005"
+  MSI_REVISION_BASE: "30000000"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
 
 jobs:
@@ -47,6 +55,22 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           submodules: recursive
+
+      - name: Validate Managed CI helper syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "./scripts/managed_ci_download.ps1").Path,
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "managed_ci_download.ps1 contains PowerShell syntax errors"
+          }
+          python -m py_compile ./scripts/managed_update_manifest.py
 
       - name: Validate Managed version metadata
         shell: pwsh
@@ -86,7 +110,9 @@ jobs:
         run: |
           flutter doctor -v
           flutter precache --windows
-          Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+          ./scripts/managed_ci_download.ps1 `
+            -Url "https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip" `
+            -OutFile "windows-x64-release.zip"
           Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
           Move-Item -Force windows-x64-release/* C:/hostedtoolcache/windows/flutter/stable-${{ env.FLUTTER_VERSION }}-x64/bin/cache/artifacts/engine/windows-x64-release/
 
@@ -108,19 +134,85 @@ jobs:
         with:
           prefix-key: windows-2022
 
-      - name: Setup vcpkg with GitHub Actions binary cache
-        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
-        with:
-          vcpkgDirectory: C:\vcpkg
-          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
-          doNotCache: false
+      - name: Prepare pinned vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = $env:VCPKG_ROOT
+          $commit = $env:VCPKG_COMMIT_ID
 
-      - name: Install vcpkg dependencies
+          $sourceReady = $false
+          if (Test-Path (Join-Path $root ".git")) {
+            for ($attempt = 1; $attempt -le 3 -and -not $sourceReady; $attempt++) {
+              Write-Host "vcpkg fetch attempt $attempt"
+              & git -C $root fetch --depth=1 origin $commit
+              if ($LASTEXITCODE -eq 0) {
+                & git -C $root checkout --force $commit
+                if ($LASTEXITCODE -eq 0) {
+                  $head = (& git -C $root rev-parse HEAD).Trim()
+                  $sourceReady = ($head -eq $commit)
+                }
+              }
+              if (-not $sourceReady) { Start-Sleep -Seconds (5 * $attempt) }
+            }
+          }
+
+          if (-not $sourceReady) {
+            Write-Warning "Pinned vcpkg git checkout unavailable; downloading exact commit archive."
+            if (Test-Path $root) { Remove-Item -Recurse -Force $root }
+            $archive = Join-Path $env:RUNNER_TEMP "vcpkg-source.zip"
+            $extract = Join-Path $env:RUNNER_TEMP "vcpkg-source"
+            if (Test-Path $extract) { Remove-Item -Recurse -Force $extract }
+            ./scripts/managed_ci_download.ps1 `
+              -Url "https://github.com/microsoft/vcpkg/archive/$commit.zip" `
+              -OutFile $archive
+            Expand-Archive -Path $archive -DestinationPath $extract
+            $dir = Get-ChildItem $extract -Directory | Select-Object -First 1
+            if (-not $dir) { throw "Failed to extract pinned vcpkg source." }
+            Move-Item $dir.FullName $root
+          }
+
+          ./scripts/managed_ci_download.ps1 `
+            -Url $env:VCPKG_TOOL_URL `
+            -OutFile (Join-Path $root "vcpkg.exe") `
+            -Sha256 $env:VCPKG_TOOL_SHA256
+
+          & (Join-Path $root "vcpkg.exe") version --disable-metrics
+          if ($LASTEXITCODE -ne 0) { throw "Pinned vcpkg tool failed to start." }
+
+      - name: Prefetch flaky GitHub vcpkg assets
+        shell: pwsh
+        run: |
+          $downloads = Join-Path $env:VCPKG_ROOT "downloads"
+          New-Item -ItemType Directory -Force $downloads | Out-Null
+
+          ./scripts/managed_ci_download.ps1 `
+            -Url "https://github.com/lu-zero/mfx_dispatch/commit/d6241243f85a0d947bdfe813006686a930edef24.patch?full_index=1" `
+            -OutFile (Join-Path $downloads "fix-missing-cstdint-import-d6241243f85a0d947bdfe813006686a930edef24.patch") `
+            -Sha512 "5d2ffc4ec2ba0e5859d01d2e072f75436ebc3e62e0f6580b5bb8b9f82fe588e7558a46a1fdfa0297a782c0eeb8f50322258d0dd9e41d927cc9be496727b61e44"
+
+          ./scripts/managed_ci_download.ps1 `
+            -Url "https://github.com/lu-zero/mfx_dispatch/archive/1.35.1.tar.gz" `
+            -OutFile (Join-Path $downloads "lu-zero-mfx_dispatch-1.35.1.tar.gz") `
+            -Sha512 "12517338342d3e653043a57e290eb9cffd190aede0c3a3948956f1c7f12f0ea859361cf3e534ab066b96b1c211f68409c67ef21fd6d76b68cc31daef541941b0"
+
+      - name: Install vcpkg dependencies with retry
         shell: bash
         env:
           VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
         run: |
-          if ! "$VCPKG_ROOT/vcpkg" install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"; then
+          set -u
+          success=0
+          for attempt in 1 2 3; do
+            echo "vcpkg install attempt $attempt"
+            if "$VCPKG_ROOT/vcpkg.exe" install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"; then
+              success=1
+              break
+            fi
+            sleep $((attempt * 10))
+          done
+
+          if [ "$success" -ne 1 ]; then
             find "${VCPKG_ROOT}/" -name "*.log" | while read -r log_file; do
               echo "$log_file:"
               cat "$log_file"
@@ -170,16 +262,16 @@ jobs:
           python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram
           Move-Item ./flutter/build/windows/x64/runner/Release ./rustdesk
 
-          Invoke-WebRequest -Uri https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
+          ./scripts/managed_ci_download.ps1 -Url "https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip" -OutFile "usbmmidd_v2.zip"
           Expand-Archive usbmmidd_v2.zip -DestinationPath .
           Remove-Item -Path usbmmidd_v2\Win32 -Recurse
           Remove-Item -Path "usbmmidd_v2\deviceinstaller64.exe", "usbmmidd_v2\deviceinstaller.exe", "usbmmidd_v2\usbmmidd.bat"
           Move-Item -Force .\usbmmidd_v2 ./rustdesk
 
           try {
-            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/rustdesk_printer_driver_v4-1.4.zip -OutFile rustdesk_printer_driver_v4-1.4.zip
-            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/printer_driver_adapter.zip -OutFile printer_driver_adapter.zip
-            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/sha256sums -OutFile sha256sums
+            ./scripts/managed_ci_download.ps1 -Url "https://github.com/rustdesk/hbb_common/releases/download/driver/rustdesk_printer_driver_v4-1.4.zip" -OutFile "rustdesk_printer_driver_v4-1.4.zip"
+            ./scripts/managed_ci_download.ps1 -Url "https://github.com/rustdesk/hbb_common/releases/download/driver/printer_driver_adapter.zip" -OutFile "printer_driver_adapter.zip"
+            ./scripts/managed_ci_download.ps1 -Url "https://github.com/rustdesk/hbb_common/releases/download/driver/sha256sums" -OutFile "sha256sums"
 
             $checksumDriver = (Select-String -Path .\sha256sums -Pattern '^([a-fA-F0-9]{64}) \*rustdesk_printer_driver_v4-1.4\.zip$').Matches.Groups[1].Value
             $downloadDriver = (Get-FileHash -Path rustdesk_printer_driver_v4-1.4.zip -Algorithm SHA256).Hash
@@ -217,8 +309,13 @@ jobs:
           "@
           Set-Content -Path ./res/msi/CustomActions/ManagedSecret.h -Value $managedSecretHeader -Encoding ascii
 
+          $msiRevision = [int64]$env:MSI_REVISION_BASE + [int64]$env:MANAGED_BUILD
+          if ($msiRevision -le 29833134) {
+            throw "MSI revision $msiRevision must be greater than r4 revision 29833134"
+          }
+
           Push-Location ./res/msi
-          python preprocess.py --arp -d ../../rustdesk
+          python preprocess.py --arp --revision-version $msiRevision -d ../../rustdesk
           nuget restore msi.sln
           msbuild msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
           $msi = Get-ChildItem ./Package/bin/*/Release/en-us/Package.msi | Select-Object -First 1
@@ -238,6 +335,8 @@ jobs:
             version = "${{ env.MANAGED_VERSION }}"
             build = [int64]"${{ env.MANAGED_BUILD }}"
             source_sha = "${{ github.sha }}"
+            msi_revision = $msiRevision
+            msi_product_version = "${{ env.VERSION }}.$msiRevision"
             msi_file = $artifactName
             sha256 = $hash
             size = $size
@@ -253,16 +352,11 @@ jobs:
             ./Artifacts/managed-build.json
           if-no-files-found: error
 
-  publish-stable:
-    name: publish-stable
+  publish-release:
+    name: publish-release
     needs: [build-x64-msi]
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout exact build source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          path: source
-
       - name: Download exact MSI artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
@@ -279,10 +373,18 @@ jobs:
           meta = json.loads((root / "managed-build.json").read_text(encoding="utf-8-sig"))
           expected_version = os.environ["MANAGED_VERSION"]
           expected_build = int(os.environ["MANAGED_BUILD"])
+          expected_revision = int(os.environ["MSI_REVISION_BASE"]) + expected_build
           if meta.get("version") != expected_version:
               raise SystemExit("managed-build.json version mismatch")
           if int(meta.get("build", -1)) != expected_build:
               raise SystemExit("managed-build.json build mismatch")
+          if int(meta.get("msi_revision", -1)) != expected_revision:
+              raise SystemExit("managed-build.json MSI revision mismatch")
+          expected_product_version = f"{os.environ['VERSION']}.{expected_revision}"
+          if str(meta.get("msi_product_version", "")) != expected_product_version:
+              raise SystemExit("managed-build.json MSI ProductVersion mismatch")
+          if expected_revision <= 29833134:
+              raise SystemExit("Managed MSI revision is not newer than r4")
           msi = root / str(meta.get("msi_file", ""))
           if not msi.is_file():
               raise SystemExit("MSI listed in managed-build.json is missing")
@@ -298,7 +400,6 @@ jobs:
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
               fh.write(f"MSI_FILE={msi.name}\n")
               fh.write(f"MSI_SHA256={digest}\n")
-              fh.write(f"MSI_SIZE={len(data)}\n")
               fh.write(f"SOURCE_SHA={source_sha}\n")
           PY
           printf '%s  %s\n' "$MSI_SHA256" "$MSI_FILE" > "release-input/$MSI_FILE.sha256"
@@ -311,7 +412,7 @@ jobs:
           set -euo pipefail
           TAG="managed-${MANAGED_VERSION}"
           if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "Release $TAG already exists. Increment MANAGED_VERSION/MANAGED_BUILD instead of replacing it."
+            echo "Release $TAG already exists. Refusing to replace an immutable Managed release."
             exit 1
           fi
           gh release create "$TAG" \
@@ -322,36 +423,4 @@ jobs:
             --target "$SOURCE_SHA" \
             --title "RustDesk Managed ${MANAGED_VERSION}" \
             --notes "Managed build ${MANAGED_BUILD}. Stable release. SHA-256: $MSI_SHA256"
-
-      - name: Generate stable update manifest
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG="managed-${MANAGED_VERSION}"
-          URL="https://github.com/${{ github.repository }}/releases/download/$TAG/$MSI_FILE"
-          python source/scripts/managed_update_manifest.py \
-            --msi "release-input/$MSI_FILE" \
-            --version "${MANAGED_VERSION}" \
-            --build "${MANAGED_BUILD}" \
-            --channel stable \
-            --url "$URL" \
-            --rollout 100 \
-            --output stable.json
-          cat stable.json
-
-      - name: Publish stable update manifest
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if gh release view managed-update --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release upload managed-update stable.json --clobber --repo "${{ github.repository }}"
-          else
-            gh release create managed-update stable.json \
-              --repo "${{ github.repository }}" \
-              --target "$SOURCE_SHA" \
-              --title "RustDesk Managed Update Manifest" \
-              --notes "Stable update manifest used by RustDesk Managed clients."
-          fi
 
