@@ -67,11 +67,11 @@ jobs:
           set -euo pipefail
           if gh release view "$MANAGED_RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             gh release upload "$MANAGED_RELEASE_TAG" \
-              "$MANAGED_MSI_PATH" "$MANAGED_MSI_PATH.sha256" \
+              "$MANAGED_MSI_PATH" "$MANAGED_MSI_PATH.sha256" "./release-input/managed-build.json" \
               --clobber --repo "${{ github.repository }}"
           else
             gh release create "$MANAGED_RELEASE_TAG" \
-              "$MANAGED_MSI_PATH" "$MANAGED_MSI_PATH.sha256" \
+              "$MANAGED_MSI_PATH" "$MANAGED_MSI_PATH.sha256" "./release-input/managed-build.json" \
               --repo "${{ github.repository }}" \
               --title "RustDesk Managed $MANAGED_VERSION" \
               --notes "Managed build $MANAGED_BUILD\n\nSource commit: $MANAGED_SOURCE_SHA\n\nSHA-256: $MANAGED_SHA256"
