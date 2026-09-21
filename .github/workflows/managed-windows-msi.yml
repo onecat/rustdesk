@@ -2,6 +2,15 @@ name: Build RustDesk Managed x64 MSI
 
 on:
   workflow_dispatch:
+    inputs:
+      update_channel:
+        description: Managed update channel compiled into this build
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
+          - test
 
 permissions:
   contents: read
@@ -12,6 +21,8 @@ env:
   FLUTTER_VERSION: "3.24.5"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
   VERSION: "1.4.9"
+  MANAGED_VERSION: "1.4.9-r4"
+  MANAGED_BUILD: "1004"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
 
 jobs:
@@ -146,6 +157,24 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_FIXED_PASSWORD_SALT=$salt"
           Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_FIXED_PASSWORD_H1_HEX=$h1Hex"
 
+      - name: Prepare Managed update signing public key
+        shell: pwsh
+        env:
+          RUSTDESK_UPDATE_SIGNING_SEED: ${{ secrets.RUSTDESK_UPDATE_SIGNING_SEED }}
+        run: |
+          if ([string]::IsNullOrEmpty($env:RUSTDESK_UPDATE_SIGNING_SEED)) {
+            throw "Repository secret RUSTDESK_UPDATE_SIGNING_SEED is required"
+          }
+          python -m pip install --disable-pip-version-check --no-warn-script-location pynacl==1.5.0
+          $publicKey = (python scripts/managed_update_sign.py public-key).Trim()
+          if ([string]::IsNullOrEmpty($publicKey)) {
+            throw "Failed to derive Managed update public key"
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_MANAGED_UPDATE_PUBLIC_KEY_BASE64=$publicKey"
+          Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_MANAGED_UPDATE_CHANNEL=${{ inputs.update_channel }}"
+          Write-Host "Managed update channel: ${{ inputs.update_channel }}"
+          Write-Host "Managed update public key: $publicKey"
+
       - name: Build RustDesk x64
         shell: pwsh
         run: |
@@ -208,12 +237,30 @@ jobs:
           Pop-Location
 
           New-Item -ItemType Directory -Force ./Artifacts | Out-Null
-          Move-Item $msi.FullName ./Artifacts/rustdesk-managed-${{ env.VERSION }}-v3-x86_64.msi
-          Get-FileHash ./Artifacts/rustdesk-managed-${{ env.VERSION }}-v3-x86_64.msi -Algorithm SHA256 | Format-List
+          $artifactName = "rustdesk-managed-${{ env.MANAGED_VERSION }}-x86_64.msi"
+          $artifactPath = Join-Path ./Artifacts $artifactName
+          Move-Item $msi.FullName $artifactPath
+          $hash = (Get-FileHash $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $size = (Get-Item $artifactPath).Length
+          Write-Host "MSI SHA256: $hash"
+          Write-Host "MSI size: $size"
+
+          $metadata = [ordered]@{
+            version = "${{ env.MANAGED_VERSION }}"
+            build = [int64]"${{ env.MANAGED_BUILD }}"
+            channel = "${{ inputs.update_channel }}"
+            source_sha = "${{ github.sha }}"
+            msi_file = $artifactName
+            sha256 = $hash
+            size = $size
+          }
+          $metadata | ConvertTo-Json | Set-Content ./Artifacts/managed-build.json -Encoding utf8
 
       - name: Upload MSI
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: rustdesk-managed-${{ env.VERSION }}-v3-x86_64-msi
-          path: ./Artifacts/rustdesk-managed-${{ env.VERSION }}-v3-x86_64.msi
+          name: rustdesk-managed-${{ env.MANAGED_VERSION }}-x86_64-msi
+          path: |
+            ./Artifacts/rustdesk-managed-${{ env.MANAGED_VERSION }}-x86_64.msi
+            ./Artifacts/managed-build.json
           if-no-files-found: error
