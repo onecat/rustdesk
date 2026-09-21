@@ -349,10 +349,18 @@ jobs:
           meta = json.loads((root / "managed-build.json").read_text(encoding="utf-8-sig"))
           expected_version = os.environ["MANAGED_VERSION"]
           expected_build = int(os.environ["MANAGED_BUILD"])
+          expected_revision = int(os.environ["MSI_REVISION_BASE"]) + expected_build
           if meta.get("version") != expected_version:
               raise SystemExit("managed-build.json version mismatch")
           if int(meta.get("build", -1)) != expected_build:
               raise SystemExit("managed-build.json build mismatch")
+          if int(meta.get("msi_revision", -1)) != expected_revision:
+              raise SystemExit("managed-build.json MSI revision mismatch")
+          expected_product_version = f"{os.environ['VERSION']}.{expected_revision}"
+          if str(meta.get("msi_product_version", "")) != expected_product_version:
+              raise SystemExit("managed-build.json MSI ProductVersion mismatch")
+          if expected_revision <= 29833134:
+              raise SystemExit("Managed MSI revision is not newer than r4")
           msi = root / str(meta.get("msi_file", ""))
           if not msi.is_file():
               raise SystemExit("MSI listed in managed-build.json is missing")
