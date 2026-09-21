@@ -163,22 +163,6 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_FIXED_PASSWORD_SALT=$salt"
           Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_FIXED_PASSWORD_H1_HEX=$h1Hex"
 
-      - name: Prepare Managed update signing public key
-        shell: pwsh
-        env:
-          RUSTDESK_UPDATE_SIGNING_SEED: ${{ secrets.RUSTDESK_UPDATE_SIGNING_SEED }}
-        run: |
-          if ([string]::IsNullOrEmpty($env:RUSTDESK_UPDATE_SIGNING_SEED)) {
-            throw "Repository secret RUSTDESK_UPDATE_SIGNING_SEED is required"
-          }
-          python -m pip install --disable-pip-version-check --no-warn-script-location pynacl==1.5.0
-          $publicKey = (python scripts/managed_update_sign.py public-key).Trim()
-          if ([string]::IsNullOrEmpty($publicKey)) {
-            throw "Failed to derive Managed update public key"
-          }
-          Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_MANAGED_UPDATE_PUBLIC_KEY_BASE64=$publicKey"
-          Write-Host "Managed update public key: $publicKey"
-
       - name: Build RustDesk x64
         shell: pwsh
         run: |
@@ -253,7 +237,6 @@ jobs:
             version = "${{ env.MANAGED_VERSION }}"
             build = [int64]"${{ env.MANAGED_BUILD }}"
             source_sha = "${{ github.sha }}"
-            update_public_key = "$env:RUSTDESK_MANAGED_UPDATE_PUBLIC_KEY_BASE64"
             msi_file = $artifactName
             sha256 = $hash
             size = $size
