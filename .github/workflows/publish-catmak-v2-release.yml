@@ -22,7 +22,7 @@ jobs:
       SOURCE_RUN_ID: "35503866341"
       ARTIFACT_NAME: rustdesk-catmak-1.4.9-v2-x86_64-msi
       MSI_NAME: rustdesk-catmak-1.4.9-v2-x86_64.msi
-      TARGET_COMMIT: 4cfac87ae3f441885214f2a648600465cf106841
+      TARGET_COMMIT: 383aae60fff1a3f6fa2f00a7f2ee2f573f531563
 
     steps:
       - name: Download exact V2 artifact
