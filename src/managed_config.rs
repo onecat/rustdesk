@@ -1,7 +1,7 @@
 use hbb_common::config::{self, keys, Config};
 
-pub(crate) const MANAGED_VERSION: &str = "1.4.9-r5";
-pub(crate) const MANAGED_BUILD: u64 = 1005;
+pub(crate) const MANAGED_VERSION: &str = "1.4.9-r6";
+pub(crate) const MANAGED_BUILD: u64 = 1006;
 pub(crate) const MANAGED_UPDATE_MANIFEST_BASE: &str =
     "https://github.com/onecat/rustdesk/releases/download/managed-update";
 pub(crate) const MANAGED_GITHUB_FALLBACK_PREFIX: &str = "https://gh.catmak.name/";
