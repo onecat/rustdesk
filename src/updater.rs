@@ -294,7 +294,12 @@ fn check_legacy_update(manually: bool) -> ResultType<()> {
 #[cfg(target_os = "windows")]
 fn check_managed_update() -> ResultType<CheckOutcome> {
     let channel = crate::managed_config::managed_update_channel();
-    let manifest_url = crate::managed_config::managed_update_manifest_url();
+    let manifest_base_url = crate::managed_config::managed_update_manifest_url();
+    let cache_bucket = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() / MANAGED_CHECK_INTERVAL.as_secs())
+        .unwrap_or_default();
+    let manifest_url = format!("{}?managed_check={}", manifest_base_url, cache_bucket);
 
     log::info!(
         "Managed update check: current={} build={} channel={}",
