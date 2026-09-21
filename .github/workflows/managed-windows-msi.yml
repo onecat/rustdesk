@@ -2,15 +2,6 @@ name: Build RustDesk Managed x64 MSI
 
 on:
   workflow_dispatch:
-    inputs:
-      update_channel:
-        description: Managed update channel compiled into this build
-        required: true
-        default: stable
-        type: choice
-        options:
-          - stable
-          - test
 
 permissions:
   contents: read
@@ -171,8 +162,6 @@ jobs:
             throw "Failed to derive Managed update public key"
           }
           Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_MANAGED_UPDATE_PUBLIC_KEY_BASE64=$publicKey"
-          Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_MANAGED_UPDATE_CHANNEL=${{ inputs.update_channel }}"
-          Write-Host "Managed update channel: ${{ inputs.update_channel }}"
           Write-Host "Managed update public key: $publicKey"
 
       - name: Build RustDesk x64
@@ -248,7 +237,6 @@ jobs:
           $metadata = [ordered]@{
             version = "${{ env.MANAGED_VERSION }}"
             build = [int64]"${{ env.MANAGED_BUILD }}"
-            channel = "${{ inputs.update_channel }}"
             source_sha = "${{ github.sha }}"
             msi_file = $artifactName
             sha256 = $hash
