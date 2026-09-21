@@ -1,7 +1,7 @@
 use hbb_common::config::{self, keys, Config};
 
-pub(crate) const MANAGED_VERSION: &str = "1.4.9-r4";
-pub(crate) const MANAGED_BUILD: u64 = 1004;
+pub(crate) const MANAGED_VERSION: &str = "1.4.9-r5";
+pub(crate) const MANAGED_BUILD: u64 = 1005;
 pub(crate) const MANAGED_UPDATE_MANIFEST_BASE: &str =
     "https://github.com/onecat/rustdesk/releases/download/managed-update";
 pub(crate) const MANAGED_GITHUB_FALLBACK_PREFIX: &str = "https://gh.catmak.name/";
@@ -11,12 +11,7 @@ pub(crate) fn managed_updates_enabled() -> bool {
 }
 
 pub(crate) fn managed_update_channel() -> String {
-    let configured = Config::get_option("managed-update-channel");
-    if configured.eq_ignore_ascii_case("test") {
-        "test".to_owned()
-    } else {
-        "stable".to_owned()
-    }
+    "stable".to_owned()
 }
 
 pub(crate) fn managed_update_manifest_url() -> String {
