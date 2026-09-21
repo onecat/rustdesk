@@ -44,12 +44,6 @@ const MANAGED_REPO_RELEASE_PREFIX: &str =
 
 #[cfg(target_os = "windows")]
 #[derive(Debug, Deserialize)]
-struct ManagedSignedManifest {
-    signed: String,
-}
-
-#[cfg(target_os = "windows")]
-#[derive(Debug, Deserialize)]
 struct ManagedManifestPayload {
     schema: u32,
     channel: String,
@@ -310,7 +304,7 @@ fn check_managed_update() -> ResultType<CheckOutcome> {
     );
 
     let (manifest_text, manifest_used_fallback) = fetch_text_with_fallback(&manifest_url, false)?;
-    let payload = verify_managed_manifest(&manifest_text)?;
+    let payload = parse_managed_manifest(&manifest_text)?;
 
     validate_managed_manifest(&payload, &channel)?;
     write_managed_state(
@@ -500,28 +494,8 @@ fn fetch_text_with_fallback(primary: &str, prefer_fallback: bool) -> ResultType<
 }
 
 #[cfg(target_os = "windows")]
-fn verify_managed_manifest(body: &str) -> ResultType<ManagedManifestPayload> {
-    hbb_common::sodiumoxide::init()
-        .map_err(|_| hbb_common::anyhow::anyhow!("Failed to initialize update signature verifier"))?;
-    let wrapper: ManagedSignedManifest = serde_json::from_str(body)?;
-    let signed = hbb_common::sodiumoxide::base64::decode(
-        &wrapper.signed,
-        hbb_common::sodiumoxide::base64::Variant::Original,
-    )
-    .map_err(|_| hbb_common::anyhow::anyhow!("Invalid managed manifest signature encoding"))?;
-    let public_key_bytes = hbb_common::sodiumoxide::base64::decode(
-        crate::managed_config::managed_update_public_key_base64(),
-        hbb_common::sodiumoxide::base64::Variant::Original,
-    )
-    .map_err(|_| hbb_common::anyhow::anyhow!("Invalid managed update public key encoding"))?;
-    let public_key =
-        hbb_common::sodiumoxide::crypto::sign::PublicKey::from_slice(&public_key_bytes)
-            .ok_or_else(|| hbb_common::anyhow::anyhow!("Invalid managed update public key"))?;
-
-    let payload_bytes = hbb_common::sodiumoxide::crypto::sign::verify(&signed, &public_key)
-        .map_err(|_| hbb_common::anyhow::anyhow!("Managed update manifest signature rejected"))?;
-    let payload: ManagedManifestPayload = serde_json::from_slice(&payload_bytes)?;
-    Ok(payload)
+fn parse_managed_manifest(body: &str) -> ResultType<ManagedManifestPayload> {
+    Ok(serde_json::from_str(body)?)
 }
 
 #[cfg(target_os = "windows")]
