@@ -70,6 +70,8 @@ jobs:
                       msi_file = str(meta["msi_file"])
                       sha256 = str(meta["sha256"]).lower()
                       size = int(meta["size"])
+                      msi_revision = meta.get("msi_revision")
+                      msi_product_version = meta.get("msi_product_version")
                   except Exception:
                       continue
 
@@ -77,6 +79,17 @@ jobs:
                       continue
                   if build <= 0 or size <= 0:
                       continue
+                  if build > 1004:
+                      try:
+                          msi_revision = int(msi_revision)
+                      except Exception:
+                          continue
+                      expected_revision = 30000000 + build
+                      if msi_revision != expected_revision or msi_revision <= 29833134:
+                          continue
+                      upstream_version = version.split("-r", 1)[0]
+                      if str(msi_product_version) != f"{upstream_version}.{msi_revision}":
+                          continue
                   if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
                       continue
                   if not msi_file.endswith(".msi") or "/" in msi_file or "\\" in msi_file:
