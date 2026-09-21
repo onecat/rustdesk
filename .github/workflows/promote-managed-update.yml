@@ -96,7 +96,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/managed_update_sign.py \
+          python scripts/managed_update_manifest.py \
             --msi "promote-input/$MANAGED_MSI" \
             --version "${{ inputs.version }}" \
             --build "$MANAGED_BUILD" \
