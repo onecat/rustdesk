@@ -36,7 +36,8 @@ const MANAGED_CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60 * 6);
 const RETRY_INTERVAL: Duration = Duration::from_secs(60 * 30);
 const MIN_INTERVAL: Duration = Duration::from_secs(60 * 10);
 const MANAGED_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const MANAGED_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 5);
+const MANAGED_MANIFEST_TIMEOUT: Duration = Duration::from_secs(20);
+const MANAGED_PACKAGE_TIMEOUT: Duration = Duration::from_secs(60 * 10);
 const MANAGED_MAX_MANIFEST_BYTES: usize = 64 * 1024;
 const MANAGED_REPO_RELEASE_PREFIX: &str =
     "https://github.com/onecat/rustdesk/releases/download/";
@@ -405,11 +406,11 @@ fn check_managed_update() -> ResultType<CheckOutcome> {
 }
 
 #[cfg(target_os = "windows")]
-fn strict_update_client() -> ResultType<reqwest::blocking::Client> {
+fn strict_update_client(request_timeout: Duration) -> ResultType<reqwest::blocking::Client> {
     Ok(reqwest::blocking::Client::builder()
         .use_rustls_tls()
         .connect_timeout(MANAGED_CONNECT_TIMEOUT)
-        .timeout(MANAGED_REQUEST_TIMEOUT)
+        .timeout(request_timeout)
         .redirect(reqwest::redirect::Policy::limited(10))
         .build()?)
 }
@@ -453,7 +454,7 @@ fn fetch_text_with_fallback(primary: &str, prefer_fallback: bool) -> ResultType<
     let sources = ordered_sources(primary, prefer_fallback);
     let mut last_error = String::new();
     for (index, (url, is_fallback)) in sources.iter().enumerate() {
-        let client = strict_update_client()?;
+        let client = strict_update_client(MANAGED_MANIFEST_TIMEOUT)?;
         match client.get(url).send() {
             Ok(response) if response.status().is_success() => {
                 let bytes = response.bytes()?;
@@ -695,7 +696,7 @@ fn download_package_from_source(url: &str, part_path: &Path, expected_size: u64)
         return Ok(());
     }
 
-    let client = strict_update_client()?;
+    let client = strict_update_client(MANAGED_PACKAGE_TIMEOUT)?;
     let mut request = client.get(url);
     if offset > 0 {
         request = request.header(reqwest::header::RANGE, format!("bytes={}-", offset));
