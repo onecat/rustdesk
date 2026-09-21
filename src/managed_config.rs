@@ -5,11 +5,13 @@ pub(crate) const MANAGED_BUILD: u64 = 1004;
 pub(crate) const MANAGED_UPDATE_MANIFEST_BASE: &str =
     "https://github.com/onecat/rustdesk/releases/download/managed-update";
 pub(crate) const MANAGED_GITHUB_FALLBACK_PREFIX: &str = "https://gh.catmak.name/";
-pub(crate) const MANAGED_UPDATE_PUBLIC_KEY_BASE64: &str =
-    "UJXvai38PWGcYzfcs0SbIjFwndxWFZxAfH7PSa62BfU=";
+
+pub(crate) fn managed_update_public_key_base64() -> &'static str {
+    option_env!("RUSTDESK_MANAGED_UPDATE_PUBLIC_KEY_BASE64").unwrap_or("")
+}
 
 pub(crate) fn managed_updates_enabled() -> bool {
-    cfg!(target_os = "windows")
+    cfg!(target_os = "windows") && !managed_update_public_key_base64().is_empty()
 }
 
 pub(crate) fn managed_update_channel() -> &'static str {
