@@ -16,7 +16,8 @@ on:
       - "res/**"
       - "appimage/**"
       - "flatpak/**"
-      - "scripts/managed_update_*.py"
+      - "scripts/managed_*.py"
+      - "scripts/managed_*.ps1"
 
 jobs:
   run-ci:
