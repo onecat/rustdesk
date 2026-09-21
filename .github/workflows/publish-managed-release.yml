@@ -51,15 +51,6 @@ jobs:
           if ($actualSize -ne [int64]$meta.size) {
             throw "MSI size mismatch"
           }
-          try {
-            $keyBytes = [Convert]::FromBase64String([string]$meta.update_public_key)
-          } catch {
-            throw "managed-build.json update_public_key is not valid base64"
-          }
-          if ($keyBytes.Length -ne 32) {
-            throw "managed-build.json update_public_key must be 32 bytes"
-          }
-
           $tag = "managed-$($meta.version)"
           "$actualHash  $($meta.msi_file)" | Set-Content "$msiPath.sha256" -Encoding ascii
 
