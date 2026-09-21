@@ -305,7 +305,7 @@ fn check_managed_update() -> ResultType<CheckOutcome> {
     let (manifest_text, manifest_used_fallback) = fetch_text_with_fallback(&manifest_url, false)?;
     let payload = verify_managed_manifest(&manifest_text)?;
 
-    validate_managed_manifest(&payload, channel)?;
+    validate_managed_manifest(&payload, &channel)?;
     write_managed_state(
         Some(&payload),
         false,
@@ -791,10 +791,11 @@ fn write_managed_state(
         log::warn!("Failed to create managed update state directory: {}", e);
         return;
     }
+    let channel = crate::managed_config::managed_update_channel();
     let state = ManagedUpdateState {
         current_version: crate::managed_config::MANAGED_VERSION,
         current_build: crate::managed_config::MANAGED_BUILD,
-        channel: crate::managed_config::managed_update_channel(),
+        channel: &channel,
         last_check_unix: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
