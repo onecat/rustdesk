@@ -73,6 +73,7 @@ jobs:
             gh release create "$MANAGED_RELEASE_TAG" \
               "$MANAGED_MSI_PATH" "$MANAGED_MSI_PATH.sha256" "./release-input/managed-build.json" \
               --repo "${{ github.repository }}" \
+              --target "$MANAGED_SOURCE_SHA" \
               --title "RustDesk Managed $MANAGED_VERSION" \
               --notes "Managed build $MANAGED_BUILD\n\nSource commit: $MANAGED_SOURCE_SHA\n\nSHA-256: $MANAGED_SHA256"
           fi
