@@ -345,13 +345,63 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if gh release view managed-update --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release upload managed-update stable.json --clobber --repo "${{ github.repository }}"
-          else
-            gh release create managed-update stable.json \
+
+          read_build() {
+            python - "$1" <<'PY'
+          import json, sys
+          with open(sys.argv[1], "r", encoding="utf-8-sig") as fh:
+              print(int(json.load(fh).get("build", -1)))
+          PY
+          }
+
+          publish_if_newer() {
+            local current_build=-1
+            rm -rf current-stable
+            mkdir -p current-stable
+
+            if gh release download managed-update \
+              --repo "${{ github.repository }}" \
+              --pattern stable.json \
+              --dir current-stable >/dev/null 2>&1; then
+              current_build="$(read_build current-stable/stable.json)"
+            fi
+
+            echo "Current stable build: $current_build"
+            echo "Candidate stable build: ${MANAGED_BUILD}"
+
+            if [ "$current_build" -ge "${MANAGED_BUILD}" ]; then
+              echo "Stable is already build $current_build; refusing to move backward or replace the same build."
+              return 0
+            fi
+
+            if gh release view managed-update --repo "${{ github.repository }}" >/dev/null 2>&1; then
+              gh release upload managed-update stable.json --clobber --repo "${{ github.repository }}"
+              return 0
+            fi
+
+            if gh release create managed-update stable.json \
               --repo "${{ github.repository }}" \
               --target "$SOURCE_SHA" \
               --title "RustDesk Managed Update Manifest" \
-              --notes "Stable update manifest used by RustDesk Managed clients."
-          fi
+              --notes "Stable update manifest used by RustDesk Managed clients."; then
+              return 0
+            fi
+
+            # Another concurrent build may have created managed-update between
+            # the checks above. Re-read it and only overwrite if this build is newer.
+            rm -rf current-stable
+            mkdir -p current-stable
+            gh release download managed-update \
+              --repo "${{ github.repository }}" \
+              --pattern stable.json \
+              --dir current-stable
+            current_build="$(read_build current-stable/stable.json)"
+            if [ "$current_build" -lt "${MANAGED_BUILD}" ]; then
+              gh release upload managed-update stable.json --clobber --repo "${{ github.repository }}"
+            else
+              echo "Concurrent publish already advanced stable to build $current_build."
+            fi
+          }
+
+          publish_if_newer
 
