@@ -20,11 +20,6 @@ on:
         required: true
         default: "100"
         type: string
-      mandatory:
-        description: Mark the update as mandatory metadata
-        required: true
-        default: false
-        type: boolean
 
 permissions:
   contents: write
@@ -122,9 +117,8 @@ jobs:
             --rollout "${{ inputs.rollout }}"
             --output "${{ inputs.channel }}.json"
           )
-          if [ "${{ inputs.mandatory }}" = "true" ]; then
-            args+=(--mandatory)
-          fi
+          # V4 intentionally does not implement forced interruption/restart.
+          # The manifest field remains false until that policy is designed separately.
           python scripts/managed_update_sign.py "${args[@]}"
 
       - name: Publish signed channel manifest
