@@ -71,7 +71,7 @@ jobs:
           test -f "promote-input/managed-build.json"
 
           python - <<'PY'
-          import hashlib, json, os, pathlib
+          import base64, hashlib, json, os, pathlib
           root = pathlib.Path("promote-input")
           meta = json.loads((root / "managed-build.json").read_text(encoding="utf-8-sig"))
           expected_version = os.environ["EXPECTED_VERSION"]
@@ -90,8 +90,12 @@ jobs:
           if len(source_sha) != 40 or any(c not in "0123456789abcdefABCDEF" for c in source_sha):
               raise SystemExit("Release metadata source_sha is invalid")
           update_public_key = str(meta.get("update_public_key", ""))
-          if not update_public_key:
-              raise SystemExit("Release metadata update_public_key is missing")
+          try:
+              update_public_key_bytes = base64.b64decode(update_public_key, validate=True)
+          except Exception:
+              raise SystemExit("Release metadata update_public_key is invalid base64")
+          if len(update_public_key_bytes) != 32:
+              raise SystemExit("Release metadata update_public_key must be 32 bytes")
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
               fh.write(f"MANAGED_BUILD={int(meta['build'])}\n")
               fh.write(f"MANAGED_SOURCE_SHA={source_sha}\n")
