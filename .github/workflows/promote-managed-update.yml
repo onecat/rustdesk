@@ -88,9 +88,13 @@ jobs:
           source_sha = str(meta.get("source_sha", ""))
           if len(source_sha) != 40 or any(c not in "0123456789abcdefABCDEF" for c in source_sha):
               raise SystemExit("Release metadata source_sha is invalid")
+          update_public_key = str(meta.get("update_public_key", ""))
+          if not update_public_key:
+              raise SystemExit("Release metadata update_public_key is missing")
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
               fh.write(f"MANAGED_BUILD={int(meta['build'])}\n")
               fh.write(f"MANAGED_SOURCE_SHA={source_sha}\n")
+              fh.write(f"MANAGED_UPDATE_PUBLIC_KEY={update_public_key}\n")
           PY
 
           echo "MANAGED_MSI=$MSI" >> "$GITHUB_ENV"
@@ -106,6 +110,12 @@ jobs:
           test -n "$RUSTDESK_UPDATE_SIGNING_SEED" || {
             echo "RUSTDESK_UPDATE_SIGNING_SEED secret is required"; exit 1;
           }
+
+          derived_public_key="$(python scripts/managed_update_sign.py public-key)"
+          if [ "$derived_public_key" != "$MANAGED_UPDATE_PUBLIC_KEY" ]; then
+            echo "Signing seed does not match the public key embedded in this MSI"
+            exit 1
+          fi
 
           args=(
             sign-manifest
