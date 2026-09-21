@@ -34,6 +34,10 @@ jobs:
           }
 
           $meta = Get-Content $metadataPath -Raw | ConvertFrom-Json
+          $msiFiles = @(Get-ChildItem "./release-input" -Filter "*.msi" -File)
+          if ($msiFiles.Count -ne 1) {
+            throw "Expected exactly one MSI in the build artifact, found $($msiFiles.Count)"
+          }
           $msiPath = Join-Path "./release-input" $meta.msi_file
           if (-not (Test-Path $msiPath)) {
             throw "MSI listed in managed-build.json was not found: $($meta.msi_file)"
@@ -46,6 +50,14 @@ jobs:
           }
           if ($actualSize -ne [int64]$meta.size) {
             throw "MSI size mismatch"
+          }
+          try {
+            $keyBytes = [Convert]::FromBase64String([string]$meta.update_public_key)
+          } catch {
+            throw "managed-build.json update_public_key is not valid base64"
+          }
+          if ($keyBytes.Length -ne 32) {
+            throw "managed-build.json update_public_key must be 32 bytes"
           }
 
           $tag = "managed-$($meta.version)"
@@ -66,6 +78,11 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$MANAGED_RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            existing_target="$(gh release view "$MANAGED_RELEASE_TAG" --repo "${{ github.repository }}" --json targetCommitish --jq .targetCommitish)"
+            if [ "$existing_target" != "$MANAGED_SOURCE_SHA" ]; then
+              echo "Release $MANAGED_RELEASE_TAG already exists for a different source: $existing_target"
+              exit 1
+            fi
             gh release upload "$MANAGED_RELEASE_TAG" \
               "$MANAGED_MSI_PATH" "$MANAGED_MSI_PATH.sha256" "./release-input/managed-build.json" \
               --clobber --repo "${{ github.repository }}"
