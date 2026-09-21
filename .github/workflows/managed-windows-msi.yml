@@ -253,6 +253,7 @@ jobs:
             version = "${{ env.MANAGED_VERSION }}"
             build = [int64]"${{ env.MANAGED_BUILD }}"
             source_sha = "${{ github.sha }}"
+            update_public_key = "$env:RUSTDESK_MANAGED_UPDATE_PUBLIC_KEY_BASE64"
             msi_file = $artifactName
             sha256 = $hash
             size = $size
