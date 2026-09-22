@@ -160,3 +160,5 @@ jobs:
               --title "RustDesk Managed Update Manifest" \
               --notes "Stable update manifest automatically tracks the highest published Managed build."
           fi
+
+# last-reconcile-trigger: r7
