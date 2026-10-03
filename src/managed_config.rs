@@ -133,6 +133,41 @@ pub(crate) fn verify_fixed_password(input: &str) -> bool {
     diff == 0
 }
 
+/// Read the dedicated Cat dashboard administrator credential injected at build time.
+///
+/// R9 supports a separate RUSTDESK_ADMIN_PASSWORD repository secret. The CI
+/// pipeline may temporarily fall back to the remote-access secret if the new
+/// secret has not been configured yet, allowing a non-breaking migration.
+fn preset_admin_password_material() -> Option<(&'static str, &'static str)> {
+    let storage = option_env!("RUSTDESK_ADMIN_PASSWORD_HASH").unwrap_or("");
+    let salt = option_env!("RUSTDESK_ADMIN_PASSWORD_SALT").unwrap_or("");
+    if storage.starts_with("00") && storage.len() > 2 && !salt.is_empty() {
+        Some((storage, salt))
+    } else {
+        None
+    }
+}
+
+/// Validate the local Cat management-mode password without exposing plaintext.
+pub(crate) fn verify_admin_password(input: &str) -> bool {
+    if input.is_empty() {
+        return false;
+    }
+    let Some((storage, salt)) = preset_admin_password_material() else {
+        return false;
+    };
+    let Some(expected) = config::decode_preset_password_h1_from_storage(storage) else {
+        return false;
+    };
+    let actual = config::compute_permanent_password_h1(input, salt);
+
+    let mut diff = 0u8;
+    for i in 0..actual.len() {
+        diff |= actual[i] ^ expected[i];
+    }
+    diff == 0
+}
+
 /// Apply managed's enforced client policy after any external/custom configuration.
 pub(crate) fn apply() {
     let has_preset_password = if let Some((storage, salt)) = preset_password_material() {
