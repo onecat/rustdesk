@@ -37,6 +37,7 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
   int _diskTotalBytes = 0;
   int _diskAvailableBytes = 0;
   int _uptimeSeconds = 0;
+  int _connectStatus = 0;
   DateTime _lastDiskRefresh = DateTime.fromMillisecondsSinceEpoch(0);
 
   @override
@@ -158,8 +159,10 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
             ? 'managed-system-info-with-disk'
             : 'managed-system-info',
       );
+      final connectRaw = await bind.mainGetConnectStatus();
       if (raw.isEmpty) return;
       final decoded = jsonDecode(raw);
+      final connectDecoded = connectRaw.isEmpty ? null : jsonDecode(connectRaw);
       if (decoded is! Map<String, dynamic> || !mounted) return;
 
       setState(() {
@@ -172,6 +175,10 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
             (decoded['memory_used'] as num?)?.toInt() ?? _memoryUsedKb;
         _uptimeSeconds =
             (decoded['uptime'] as num?)?.toInt() ?? _uptimeSeconds;
+        if (connectDecoded is Map<String, dynamic>) {
+          _connectStatus =
+              (connectDecoded['status_num'] as num?)?.toInt() ?? _connectStatus;
+        }
         final diskTotal = (decoded['disk_total'] as num?)?.toInt() ?? 0;
         final diskAvailable = (decoded['disk_available'] as num?)?.toInt() ?? 0;
         if (diskTotal > 0) {
@@ -426,7 +433,6 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
 
   Widget _dashboard(BuildContext context) {
     final id = gFFI.serverModel.serverId.text;
-    final systemError = gFFI.serverModel.errorMessage;
     final memoryPercent = _percent(_memoryUsedKb, _memoryTotalKb);
     final diskUsed =
         _diskTotalBytes > 0 ? _diskTotalBytes - _diskAvailableBytes : 0;
@@ -534,14 +540,22 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
                   Icons.health_and_safety_outlined,
                   Column(
                     children: [
-                      _row('RustDesk Service', 'Managed / 自动运行'),
+                      _row(
+                        'RustDesk Service',
+                        '',
+                        trailing: _statusDot(
+                          bind.mainGetOptionSync(key: 'stop-service') != 'Y',
+                          '正常运行',
+                          '服务停止',
+                        ),
+                      ),
                       _row(
                         'Server',
                         '',
                         trailing: _statusDot(
-                          systemError.isEmpty,
+                          _connectStatus == 1,
                           '已连接',
-                          '连接异常',
+                          _connectStatus == 0 ? '连接中' : '连接异常',
                         ),
                       ),
                       _row(
@@ -586,7 +600,6 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
 
   @override
   Widget build(BuildContext context) {
-    final serverError = gFFI.serverModel.errorMessage;
     return Container(
       color: Theme.of(context).scaffoldBackgroundColor,
       child: Column(
@@ -614,7 +627,7 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
                   style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(width: 14),
-                _statusDot(serverError.isEmpty, '在线', '网络异常'),
+                _statusDot(_connectStatus == 1, '在线', '连接中'),
                 const Spacer(),
                 if (_adminUnlocked)
                   TextButton.icon(
