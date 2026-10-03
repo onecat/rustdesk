@@ -1,7 +1,7 @@
 use hbb_common::{
     config::{self, keys, Config},
     lazy_static,
-    sysinfo::{CpuExt, DiskExt, System, SystemExt},
+    sysinfo::{Disks, System},
 };
 use std::sync::Mutex;
 
@@ -31,6 +31,7 @@ lazy_static::lazy_static! {
     /// Reuse one sysinfo instance so CPU utilization has a previous sample and
     /// the dashboard does not repeatedly rebuild expensive system state.
     static ref MANAGED_SYSTEM_INFO: Mutex<System> = Mutex::new(System::new());
+    static ref MANAGED_DISKS: Mutex<Disks> = Mutex::new(Disks::new());
 }
 
 /// Lightweight system snapshot for the Cat dashboard.
@@ -47,10 +48,6 @@ pub(crate) fn managed_system_info_json(refresh_disk: bool) -> String {
 
     sys.refresh_cpu();
     sys.refresh_memory();
-    if refresh_disk {
-        sys.refresh_disks_list();
-        sys.refresh_disks();
-    }
 
     let cpu_usage = sys.global_cpu_info().cpu_usage();
     let cpu_brand = sys
@@ -62,15 +59,26 @@ pub(crate) fn managed_system_info_json(refresh_disk: bool) -> String {
     let system_drive = std::env::var("SystemDrive")
         .unwrap_or_else(|_| "C:".to_owned())
         .to_lowercase();
-    let disk = sys.disks().iter().find(|disk| {
-        disk.mount_point()
-            .to_string_lossy()
-            .to_lowercase()
-            .starts_with(&system_drive)
-    });
-    let (disk_total, disk_available) = disk
-        .map(|disk| (disk.total_space(), disk.available_space()))
-        .unwrap_or((0, 0));
+    let (disk_total, disk_available) = match MANAGED_DISKS.lock() {
+        Ok(mut disks) => {
+            if refresh_disk {
+                disks.refresh_list();
+                disks.refresh();
+            }
+            disks
+                .list()
+                .iter()
+                .find(|disk| {
+                    disk.mount_point()
+                        .to_string_lossy()
+                        .to_lowercase()
+                        .starts_with(&system_drive)
+                })
+                .map(|disk| (disk.total_space(), disk.available_space()))
+                .unwrap_or((0, 0))
+        }
+        Err(_) => (0, 0),
+    };
 
     serde_json::json!({
         "cpu_usage": cpu_usage,
