@@ -35,9 +35,9 @@ pub(crate) fn version_check_disabled() -> bool {
 
 /// Read password-derived material injected only into the final Windows build.
 ///
-/// The public repository contains neither the plaintext permanent password nor
-/// its authentication hash/salt. GitHub Actions supplies these compile-time
-/// environment variables from the repository secret.
+/// The public repository never contains the plaintext permanent password.
+/// GitHub Actions derives the authentication hash from the password secret and
+/// the public, stable Managed salt, then injects both at compile time.
 fn preset_password_material() -> Option<(&'static str, &'static str)> {
     let storage = option_env!("RUSTDESK_FIXED_PASSWORD_HASH").unwrap_or("");
     let salt = option_env!("RUSTDESK_FIXED_PASSWORD_SALT").unwrap_or("");
