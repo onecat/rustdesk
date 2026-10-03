@@ -1,7 +1,12 @@
-use hbb_common::config::{self, keys, Config};
+use hbb_common::{
+    config::{self, keys, Config},
+    lazy_static,
+    sysinfo::{CpuExt, DiskExt, System, SystemExt},
+};
+use std::sync::Mutex;
 
-pub(crate) const MANAGED_VERSION: &str = "1.4.9-r8";
-pub(crate) const MANAGED_BUILD: u64 = 1008;
+pub(crate) const MANAGED_VERSION: &str = "1.4.9-r9";
+pub(crate) const MANAGED_BUILD: u64 = 1009;
 pub(crate) const MANAGED_UPDATE_MANIFEST_BASE: &str =
     "https://github.com/onecat/rustdesk/releases/download/managed-update";
 pub(crate) const MANAGED_GITHUB_FALLBACK_PREFIX: &str = "https://gh.catmak.name/";
@@ -20,6 +25,63 @@ pub(crate) fn managed_update_manifest_url() -> String {
         MANAGED_UPDATE_MANIFEST_BASE,
         managed_update_channel()
     )
+}
+
+lazy_static::lazy_static! {
+    /// Reuse one sysinfo instance so CPU utilization has a previous sample and
+    /// the dashboard does not repeatedly rebuild expensive system state.
+    static ref MANAGED_SYSTEM_INFO: Mutex<System> = Mutex::new(System::new());
+}
+
+/// Lightweight system snapshot for the Cat dashboard.
+///
+/// Memory values follow the sysinfo 0.29 representation and are passed through
+/// unchanged; the Flutter side formats them defensively. Disk enumeration is
+/// intentionally optional so the common 10-second refresh does not rescan
+/// volumes. The UI requests disk data only on first display and every 60 seconds.
+pub(crate) fn managed_system_info_json(refresh_disk: bool) -> String {
+    let mut sys = match MANAGED_SYSTEM_INFO.lock() {
+        Ok(sys) => sys,
+        Err(_) => return "{}".to_owned(),
+    };
+
+    sys.refresh_cpu();
+    sys.refresh_memory();
+    if refresh_disk {
+        sys.refresh_disks_list();
+        sys.refresh_disks();
+    }
+
+    let cpu_usage = sys.global_cpu_info().cpu_usage();
+    let cpu_brand = sys
+        .cpus()
+        .first()
+        .map(|cpu| cpu.brand().trim().to_owned())
+        .unwrap_or_default();
+
+    let system_drive = std::env::var("SystemDrive")
+        .unwrap_or_else(|_| "C:".to_owned())
+        .to_lowercase();
+    let disk = sys.disks().iter().find(|disk| {
+        disk.mount_point()
+            .to_string_lossy()
+            .to_lowercase()
+            .starts_with(&system_drive)
+    });
+    let (disk_total, disk_available) = disk
+        .map(|disk| (disk.total_space(), disk.available_space()))
+        .unwrap_or((0, 0));
+
+    serde_json::json!({
+        "cpu_usage": cpu_usage,
+        "cpu_brand": cpu_brand,
+        "memory_total": sys.total_memory(),
+        "memory_used": sys.used_memory(),
+        "uptime": sys.uptime(),
+        "disk_total": disk_total,
+        "disk_available": disk_available,
+    })
+    .to_string()
 }
 
 
