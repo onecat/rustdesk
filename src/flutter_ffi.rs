@@ -1780,6 +1780,11 @@ pub fn main_verify_managed_password(password: String) -> bool {
     crate::managed_config::verify_fixed_password(&password)
 }
 
+/// Validate the Cat dashboard management password.
+pub fn main_verify_managed_admin_password(password: String) -> bool {
+    crate::managed_config::verify_admin_password(&password)
+}
+
 pub fn main_get_fingerprint() -> String {
     get_fingerprint()
 }
