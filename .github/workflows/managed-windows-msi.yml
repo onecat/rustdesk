@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - rustdesk-managed-1.4.9-r9
+    paths-ignore:
+      - ".github/workflows/managed-windows-msi.yml"
 
 concurrency:
   group: rustdesk-managed-stable-release
@@ -130,6 +132,20 @@ jobs:
           cp .github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff $(dirname $(dirname $(which flutter)))
           cd $(dirname $(dirname $(which flutter)))
           [[ "3.24.5" == "${{ env.FLUTTER_VERSION }}" ]] && git apply flutter_3.24.4_dropdown_menu_enableFilter.diff
+
+      - name: Analyze Managed Flutter dashboard
+        shell: pwsh
+        run: |
+          Push-Location ./flutter
+          try {
+            flutter pub get
+            flutter analyze --no-fatal-infos --no-fatal-warnings lib/desktop/managed/managed_dashboard.dart
+            if ($LASTEXITCODE -ne 0) {
+              throw "Managed Flutter dashboard analysis failed"
+            }
+          } finally {
+            Pop-Location
+          }
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
