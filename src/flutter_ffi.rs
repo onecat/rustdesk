@@ -2816,7 +2816,15 @@ pub fn main_get_printer_names() -> SyncReturn<String> {
 }
 
 pub fn main_get_common(key: String) -> String {
-    if key == "is-printer-installed" {
+    if key == "managed-system-info" {
+        return crate::managed_config::managed_system_info_json(false);
+    } else if key == "managed-system-info-with-disk" {
+        return crate::managed_config::managed_system_info_json(true);
+    } else if key == "managed-version" {
+        return crate::managed_config::MANAGED_VERSION.to_owned();
+    } else if key == "managed-build" {
+        return crate::managed_config::MANAGED_BUILD.to_string();
+    } else if key == "is-printer-installed" {
         #[cfg(target_os = "windows")]
         {
             return match remote_printer::is_rd_printer_installed(&get_app_name()) {
