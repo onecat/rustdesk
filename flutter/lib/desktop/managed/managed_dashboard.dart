@@ -242,8 +242,8 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
                 busy = true;
                 errorText = '';
               });
-              final ok =
-                  bind.mainVerifyManagedAdminPassword(password: controller.text);
+              final ok = await bind.mainVerifyManagedAdminPassword(
+                  password: controller.text);
               if (!ok) {
                 await Future.delayed(const Duration(milliseconds: 500));
                 if (dialogContext.mounted) {
