@@ -20,9 +20,12 @@ env:
   VCPKG_TOOL_URL: "https://github.com/microsoft/vcpkg-tool/releases/download/2025-07-21/vcpkg.exe"
   VCPKG_TOOL_SHA256: "df8a0cba47ec0aff33ea377b66a5eef7397f8455a082a4dfad881fcc280e096d"
   VERSION: "1.4.9"
-  MANAGED_VERSION: "1.4.9-r7"
-  MANAGED_BUILD: "1007"
+  MANAGED_VERSION: "1.4.9-r8"
+  MANAGED_BUILD: "1008"
   MSI_REVISION_BASE: "30000000"
+  # Public, stable salt for Managed permanent-password hashing. Keep unchanged
+  # across future Managed releases so remembered peer credentials remain valid.
+  MANAGED_PASSWORD_SALT: "sK4nag2LzkB7i5EjEAJJ7rHr+sMtZsAal6E77quYqrY="
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
 
 jobs:
@@ -230,14 +233,18 @@ jobs:
             throw "Repository secret RUSTDESK_FIXED_PASSWORD is required"
           }
 
-          $saltBytes = New-Object byte[] 32
-          $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-          try {
-            $rng.GetBytes($saltBytes)
-          } finally {
-            $rng.Dispose()
+          $salt = $env:MANAGED_PASSWORD_SALT
+          if ([string]::IsNullOrWhiteSpace($salt)) {
+            throw "MANAGED_PASSWORD_SALT must be configured"
           }
-          $salt = [Convert]::ToBase64String($saltBytes)
+          try {
+            $saltBytes = [Convert]::FromBase64String($salt)
+          } catch {
+            throw "MANAGED_PASSWORD_SALT must be valid Base64"
+          }
+          if ($saltBytes.Length -ne 32) {
+            throw "MANAGED_PASSWORD_SALT must decode to exactly 32 bytes"
+          }
 
           $material = [Text.Encoding]::UTF8.GetBytes($env:RUSTDESK_FIXED_PASSWORD + $salt)
           $sha = [System.Security.Cryptography.SHA256]::Create()
