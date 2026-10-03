@@ -49,6 +49,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   var watchIsInputMonitoring = false;
   var watchIsCanRecordAudio = false;
   Timer? _updateTimer;
+  Timer? _ipUpdateTimer;
+  String _localIpv4 = '';
   bool isCardClosed = false;
 
   final RxBool _editHover = false.obs;
@@ -93,6 +95,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       buildTip(context),
       if (!isOutgoingOnly) buildIDBoard(context),
       if (!isOutgoingOnly) buildPasswordBoard(context),
+      if (!isOutgoingOnly) buildIPBoard(context),
       FutureBuilder<Widget>(
         future: Future.value(
             Obx(() => buildHelpCards(stateGlobal.updateUrl.value))),
@@ -389,6 +392,142 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         ],
       ),
     );
+  }
+
+  buildIPBoard(BuildContext context) {
+    final value = _localIpv4.isEmpty ? '--' : _localIpv4;
+    final textColor = Theme.of(context).textTheme.titleLarge?.color;
+    return Container(
+      margin: const EdgeInsets.only(left: 20.0, right: 16, bottom: 13),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          Container(
+            width: 2,
+            height: 52,
+            decoration: const BoxDecoration(color: MyTheme.accent),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(left: 7),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AutoSizeText(
+                    translate("IP Address"),
+                    style: TextStyle(
+                        fontSize: 14, color: textColor?.withOpacity(0.5)),
+                    maxLines: 1,
+                  ),
+                  const SizedBox(height: 10),
+                  GestureDetector(
+                    onDoubleTap: _localIpv4.isEmpty
+                        ? null
+                        : () {
+                            Clipboard.setData(
+                                ClipboardData(text: _localIpv4));
+                            showToast(translate("Copied"));
+                          },
+                    child: Tooltip(
+                      message: value,
+                      child: Text(
+                        value,
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                        style: const TextStyle(fontSize: 15),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  bool _isPrivateIpv4(InternetAddress address) {
+    final bytes = address.rawAddress;
+    if (bytes.length != 4) {
+      return false;
+    }
+    return bytes[0] == 10 ||
+        (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) ||
+        (bytes[0] == 192 && bytes[1] == 168);
+  }
+
+  int _localIpv4Score(NetworkInterface interface, InternetAddress address) {
+    final name = interface.name.toLowerCase();
+    var score = _isPrivateIpv4(address) ? 50 : 0;
+
+    if (name.contains('wi-fi') ||
+        name.contains('wifi') ||
+        name.contains('wlan') ||
+        name.contains('ethernet')) {
+      score += 100;
+    }
+
+    if (name.contains('virtual') ||
+        name.contains('vmware') ||
+        name.contains('vbox') ||
+        name.contains('hyper-v') ||
+        name.contains('vethernet') ||
+        name.contains('docker') ||
+        name.contains('wsl') ||
+        name.contains('tailscale') ||
+        name.contains('zerotier') ||
+        name.contains('bluetooth')) {
+      score -= 100;
+    }
+    return score;
+  }
+
+  Future<String> _findPreferredLocalIpv4() async {
+    try {
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+        includeLinkLocal: false,
+      );
+      final candidates = <({int score, String address})>[];
+      for (final interface in interfaces) {
+        for (final address in interface.addresses) {
+          if (address.type != InternetAddressType.IPv4 ||
+              address.isLoopback ||
+              address.isLinkLocal ||
+              address.address == '0.0.0.0') {
+            continue;
+          }
+          candidates.add((
+            score: _localIpv4Score(interface, address),
+            address: address.address,
+          ));
+        }
+      }
+      candidates.sort((a, b) {
+        final scoreOrder = b.score.compareTo(a.score);
+        if (scoreOrder != 0) {
+          return scoreOrder;
+        }
+        return a.address.compareTo(b.address);
+      });
+      return candidates.isEmpty ? '' : candidates.first.address;
+    } catch (e) {
+      debugPrint('Failed to enumerate local IPv4 addresses: $e');
+      return '';
+    }
+  }
+
+  Future<void> _refreshLocalIpv4() async {
+    final value = await _findPreferredLocalIpv4();
+    if (!mounted || value == _localIpv4) {
+      return;
+    }
+    setState(() {
+      _localIpv4 = value;
+    });
   }
 
   buildTip(BuildContext context) {
@@ -700,6 +839,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   @override
   void initState() {
     super.initState();
+    _ipUpdateTimer =
+        periodic_immediate(const Duration(seconds: 5), _refreshLocalIpv4);
     _updateTimer = periodic_immediate(const Duration(seconds: 1), () async {
       await gFFI.serverModel.fetchID();
       final error = await bind.mainGetError();
@@ -882,6 +1023,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     _uniLinksSubscription?.cancel();
     Get.delete<RxBool>(tag: 'stop-service');
     _updateTimer?.cancel();
+    _ipUpdateTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -891,6 +1033,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
       shouldBeBlocked(_block, canBeBlocked);
+      _refreshLocalIpv4();
     }
   }
 
