@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - rustdesk-managed-1.4.9-r8
+      - rustdesk-managed-1.4.9-r9
 
 concurrency:
   group: rustdesk-managed-stable-release
@@ -23,12 +23,14 @@ env:
   VCPKG_TOOL_URL: "https://github.com/microsoft/vcpkg-tool/releases/download/2025-07-21/vcpkg.exe"
   VCPKG_TOOL_SHA256: "df8a0cba47ec0aff33ea377b66a5eef7397f8455a082a4dfad881fcc280e096d"
   VERSION: "1.4.9"
-  MANAGED_VERSION: "1.4.9-r8"
-  MANAGED_BUILD: "1008"
+  MANAGED_VERSION: "1.4.9-r9"
+  MANAGED_BUILD: "1009"
   MSI_REVISION_BASE: "30000000"
   # Public, stable salt for Managed permanent-password hashing. Keep unchanged
   # across future Managed releases so remembered peer credentials remain valid.
   MANAGED_PASSWORD_SALT: "sK4nag2LzkB7i5EjEAJJ7rHr+sMtZsAal6E77quYqrY="
+  # Separate stable salt for the local Cat management-mode credential.
+  MANAGED_ADMIN_PASSWORD_SALT: "9WDSC7xqUMpq/Tqt5E/IRFayB7e3aXbDLrRtISEHSto="
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
 
 jobs:
@@ -231,6 +233,7 @@ jobs:
         shell: pwsh
         env:
           RUSTDESK_FIXED_PASSWORD: ${{ secrets.RUSTDESK_FIXED_PASSWORD }}
+          RUSTDESK_ADMIN_PASSWORD: ${{ secrets.RUSTDESK_ADMIN_PASSWORD }}
         run: |
           if ([string]::IsNullOrEmpty($env:RUSTDESK_FIXED_PASSWORD)) {
             throw "Repository secret RUSTDESK_FIXED_PASSWORD is required"
@@ -265,6 +268,36 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_FIXED_PASSWORD_HASH=$storage"
           Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_FIXED_PASSWORD_SALT=$salt"
           Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_FIXED_PASSWORD_H1_HEX=$h1Hex"
+
+          $adminPassword = $env:RUSTDESK_ADMIN_PASSWORD
+          if ([string]::IsNullOrEmpty($adminPassword)) {
+            Write-Warning "RUSTDESK_ADMIN_PASSWORD is not configured; R9 management mode temporarily uses the remote-access password."
+            $adminPassword = $env:RUSTDESK_FIXED_PASSWORD
+          }
+
+          $adminSalt = $env:MANAGED_ADMIN_PASSWORD_SALT
+          try {
+            $adminSaltBytes = [Convert]::FromBase64String($adminSalt)
+          } catch {
+            throw "MANAGED_ADMIN_PASSWORD_SALT must be valid Base64"
+          }
+          if ($adminSaltBytes.Length -ne 32) {
+            throw "MANAGED_ADMIN_PASSWORD_SALT must decode to exactly 32 bytes"
+          }
+
+          $adminMaterial = [Text.Encoding]::UTF8.GetBytes($adminPassword + $adminSalt)
+          $adminSha = [System.Security.Cryptography.SHA256]::Create()
+          try {
+            $adminH1 = $adminSha.ComputeHash($adminMaterial)
+          } finally {
+            $adminSha.Dispose()
+          }
+          $adminStorage = "00" + [Convert]::ToBase64String($adminH1)
+
+          Write-Output "::add-mask::$adminStorage"
+          Write-Output "::add-mask::$adminSalt"
+          Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_ADMIN_PASSWORD_HASH=$adminStorage"
+          Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_ADMIN_PASSWORD_SALT=$adminSalt"
 
       - name: Build RustDesk x64
         shell: pwsh
