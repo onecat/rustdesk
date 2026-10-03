@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
+import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:window_manager/window_manager.dart';
 
 class ManagedDashboardPage extends StatefulWidget {
@@ -32,12 +33,11 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
 
   String _cpuBrand = '';
   double _cpuUsage = 0;
-  int _memoryTotalKb = 0;
-  int _memoryUsedKb = 0;
+  int _memoryTotalBytes = 0;
+  int _memoryUsedBytes = 0;
   int _diskTotalBytes = 0;
   int _diskAvailableBytes = 0;
   int _uptimeSeconds = 0;
-  int _connectStatus = 0;
   DateTime _lastDiskRefresh = DateTime.fromMillisecondsSinceEpoch(0);
 
   @override
@@ -167,26 +167,20 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
             ? 'managed-system-info-with-disk'
             : 'managed-system-info',
       );
-      final connectRaw = await bind.mainGetConnectStatus();
       if (raw.isEmpty) return;
       final decoded = jsonDecode(raw);
-      final connectDecoded = connectRaw.isEmpty ? null : jsonDecode(connectRaw);
       if (decoded is! Map<String, dynamic> || !mounted) return;
 
       setState(() {
         _cpuUsage = (decoded['cpu_usage'] as num?)?.toDouble() ?? _cpuUsage;
         final brand = decoded['cpu_brand']?.toString() ?? '';
         if (brand.isNotEmpty) _cpuBrand = brand;
-        _memoryTotalKb =
-            (decoded['memory_total'] as num?)?.toInt() ?? _memoryTotalKb;
-        _memoryUsedKb =
-            (decoded['memory_used'] as num?)?.toInt() ?? _memoryUsedKb;
+        _memoryTotalBytes =
+            (decoded['memory_total'] as num?)?.toInt() ?? _memoryTotalBytes;
+        _memoryUsedBytes =
+            (decoded['memory_used'] as num?)?.toInt() ?? _memoryUsedBytes;
         _uptimeSeconds =
             (decoded['uptime'] as num?)?.toInt() ?? _uptimeSeconds;
-        if (connectDecoded is Map<String, dynamic>) {
-          _connectStatus =
-              (connectDecoded['status_num'] as num?)?.toInt() ?? _connectStatus;
-        }
         final diskTotal = (decoded['disk_total'] as num?)?.toInt() ?? 0;
         final diskAvailable = (decoded['disk_available'] as num?)?.toInt() ?? 0;
         if (diskTotal > 0) {
@@ -200,10 +194,8 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
     }
   }
 
-  String _formatMemory(int kib) {
-    if (kib <= 0) return '--';
-    final gib = kib / 1024 / 1024;
-    return gib.toStringAsFixed(gib >= 10 ? 1 : 2) + ' GB';
+  String _formatMemory(int bytes) {
+    return _formatBytes(bytes);
   }
 
   String _formatBytes(int bytes) {
@@ -441,7 +433,8 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
 
   Widget _dashboard(BuildContext context) {
     final id = gFFI.serverModel.serverId.text;
-    final memoryPercent = _percent(_memoryUsedKb, _memoryTotalKb);
+    final connectStatus = gFFI.serverModel.connectStatus;
+    final memoryPercent = _percent(_memoryUsedBytes, _memoryTotalBytes);
     final diskUsed =
         _diskTotalBytes > 0 ? _diskTotalBytes - _diskAvailableBytes : 0;
     final diskPercent = _percent(diskUsed, _diskTotalBytes);
@@ -521,9 +514,9 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
                           _cpuUsage.toStringAsFixed(0) + '%', _cpuUsage),
                       _metric(
                         '内存',
-                        _formatMemory(_memoryUsedKb) +
+                        _formatMemory(_memoryUsedBytes) +
                             ' / ' +
-                            _formatMemory(_memoryTotalKb),
+                            _formatMemory(_memoryTotalBytes),
                         memoryPercent,
                       ),
                       _metric(
@@ -561,9 +554,9 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
                         'Server',
                         '',
                         trailing: _statusDot(
-                          _connectStatus == 1,
+                          connectStatus == 1,
                           '已连接',
-                          _connectStatus == 0 ? '连接中' : '连接异常',
+                          connectStatus == 0 ? '连接中' : '连接异常',
                         ),
                       ),
                       _row(
@@ -608,6 +601,7 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
 
   @override
   Widget build(BuildContext context) {
+    final connectStatus = gFFI.serverModel.connectStatus;
     return Container(
       color: Theme.of(context).scaffoldBackgroundColor,
       child: Column(
@@ -635,7 +629,11 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
                   style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(width: 14),
-                _statusDot(_connectStatus == 1, '在线', '连接中'),
+                _statusDot(
+                  connectStatus == 1,
+                  '在线',
+                  connectStatus == 0 ? '连接中' : '网络异常',
+                ),
                 const Spacer(),
                 if (_adminUnlocked)
                   TextButton.icon(
