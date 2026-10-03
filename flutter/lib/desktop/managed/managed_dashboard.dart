@@ -44,6 +44,7 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
   void initState() {
     super.initState();
     windowManager.setTitle('RustDesk - Cat 定制版');
+    gFFI.serverModel.addListener(_onServerModelChanged);
     _loadStaticInfo();
     _refreshIp();
     _refreshSystemInfo();
@@ -52,8 +53,15 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
     _ipTimer = Timer.periodic(const Duration(seconds: 10), (_) => _refreshIp());
   }
 
+  void _onServerModelChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   @override
   void dispose() {
+    gFFI.serverModel.removeListener(_onServerModelChanged);
     _systemTimer?.cancel();
     _ipTimer?.cancel();
     super.dispose();
