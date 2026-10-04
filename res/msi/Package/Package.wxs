@@ -21,6 +21,12 @@
 		<Property Id="ARPNOMODIFY" Value="1" />
 		<Property Id="ARPNOREPAIR" Value="1" />
 
+		<!-- Optional command-line credential overrides. Hidden prevents Windows
+		     Installer logging from echoing values; Secure forwards them to the
+		     elevated execute sequence. Only derived hashes are persisted. -->
+		<Property Id="REMOTE_PASSWORD" Hidden="yes" Secure="yes" />
+		<Property Id="ADMIN_PASSWORD" Hidden="yes" Secure="yes" />
+
 		<InstallExecuteSequence>
 			<InstallExecute After="RemoveExistingProducts" />
 
