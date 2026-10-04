@@ -21,6 +21,7 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage>
   Timer? _systemTimer;
   Timer? _ipTimer;
   Timer? _adminLockTimer;
+  Timer? _securityTimer;
 
   static const Duration _adminIdleTimeout = Duration(minutes: 10);
   final TextEditingController _managedTargetController = TextEditingController();
@@ -58,6 +59,11 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage>
     _systemTimer =
         Timer.periodic(const Duration(seconds: 10), (_) => _refreshSystemInfo());
     _ipTimer = Timer.periodic(const Duration(seconds: 10), (_) => _refreshIp());
+    _securityTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_adminUnlocked && bind.mainIsWindowsSessionLocked()) {
+        _lock();
+      }
+    });
   }
 
   void _onServerModelChanged() {
@@ -73,6 +79,7 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage>
     _systemTimer?.cancel();
     _ipTimer?.cancel();
     _adminLockTimer?.cancel();
+    _securityTimer?.cancel();
     _managedTargetController.dispose();
     super.dispose();
   }
@@ -80,14 +87,6 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    if (_adminUnlocked &&
-        (state == AppLifecycleState.inactive ||
-            state == AppLifecycleState.paused ||
-            state == AppLifecycleState.hidden ||
-            state == AppLifecycleState.detached)) {
-      _lock();
-      return;
-    }
     if (state == AppLifecycleState.resumed) {
       _refreshIp();
       _refreshSystemInfo();
@@ -449,7 +448,10 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage>
                       hintText: '输入目标设备 ID',
                       border: OutlineInputBorder(),
                     ),
-                    onChanged: (_) => _recordAdminActivity(),
+                    onChanged: (_) {
+                      _recordAdminActivity();
+                      setState(() {});
+                    },
                     onSubmitted: (_) {
                       _launchManagedTool(
                         fileTransfer: fileTransfer,
@@ -821,10 +823,8 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage>
     final connectStatus = gFFI.serverModel.connectStatus;
     return Focus(
       autofocus: true,
-      onKeyEvent: (_, event) {
-        if (event is KeyDownEvent || event is KeyRepeatEvent) {
-          _recordAdminActivity();
-        }
+      onKeyEvent: (_, __) {
+        _recordAdminActivity();
         return KeyEventResult.ignored;
       },
       child: Listener(

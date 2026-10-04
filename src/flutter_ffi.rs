@@ -2320,6 +2320,10 @@ pub fn option_synced() -> bool {
     crate::ui_interface::option_synced()
 }
 
+pub fn main_is_windows_session_locked() -> SyncReturn<bool> {
+    SyncReturn(crate::managed_config::windows_session_locked())
+}
+
 pub fn main_is_installed() -> SyncReturn<bool> {
     SyncReturn(is_installed())
 }

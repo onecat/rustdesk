@@ -109,6 +109,31 @@ pub(crate) fn connection_manager_hidden() -> bool {
     cfg!(target_os = "windows")
 }
 
+/// Detect the Windows secure/locked desktop without treating ordinary focus
+/// changes or minimization as a lock event. A secure desktop also covers UAC
+/// secure prompts, where relocking the local management UI is conservative.
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_session_locked() -> bool {
+    use winapi::um::winuser::{
+        CloseDesktop, OpenInputDesktop, SwitchDesktop, DESKTOP_SWITCHDESKTOP,
+    };
+
+    unsafe {
+        let desktop = OpenInputDesktop(0, 0, DESKTOP_SWITCHDESKTOP);
+        if desktop.is_null() {
+            return true;
+        }
+        let unlocked = SwitchDesktop(desktop) != 0;
+        CloseDesktop(desktop);
+        !unlocked
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn windows_session_locked() -> bool {
+    false
+}
+
 /// Read password-derived material injected only into the final Windows build.
 ///
 /// The public repository never contains the plaintext permanent password.
