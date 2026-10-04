@@ -4,3 +4,4 @@
 // in the GitHub Actions runner with password-derived material only.
 #define RUSTDESK_MANAGED_PASSWORD_SALT ""
 #define RUSTDESK_MANAGED_PASSWORD_H1_HEX ""
+#define RUSTDESK_MANAGED_ADMIN_PASSWORD_SALT ""
