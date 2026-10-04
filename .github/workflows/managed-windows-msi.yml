@@ -87,6 +87,15 @@ jobs:
             throw "managed_ci_download.ps1 contains PowerShell syntax errors"
           }
           python -m py_compile ./scripts/managed_update_manifest.py
+          $package = Get-Content ./res/msi/Package/Package.wxs -Raw
+          $actions = Get-Content ./res/msi/Package/Fragments/CustomActions.wxs -Raw
+          if ($package -notmatch 'Property Id="REMOTE_PASSWORD" Hidden="yes" Secure="yes"' -or
+              $package -notmatch 'Property Id="ADMIN_PASSWORD" Hidden="yes" Secure="yes"') {
+            throw "Managed MSI credential properties are missing or not protected"
+          }
+          if ($actions -notmatch 'Id="ApplyManagedPasswords".*HideTarget="yes"') {
+            throw "Managed deferred credential action must hide its target"
+          }
 
       - name: Validate Managed version metadata
         shell: pwsh
@@ -293,7 +302,7 @@ jobs:
 
           $adminPassword = $env:RUSTDESK_ADMIN_PASSWORD
           if ([string]::IsNullOrEmpty($adminPassword)) {
-            Write-Warning "RUSTDESK_ADMIN_PASSWORD is not configured; R9 management mode temporarily uses the remote-access password."
+            Write-Warning "RUSTDESK_ADMIN_PASSWORD is not configured; Managed management mode temporarily uses the remote-access password."
             $adminPassword = $env:RUSTDESK_FIXED_PASSWORD
           }
 
@@ -371,6 +380,7 @@ jobs:
           #pragma once
           #define RUSTDESK_MANAGED_PASSWORD_SALT "$env:RUSTDESK_FIXED_PASSWORD_SALT"
           #define RUSTDESK_MANAGED_PASSWORD_H1_HEX "$env:RUSTDESK_FIXED_PASSWORD_H1_HEX"
+          #define RUSTDESK_MANAGED_ADMIN_PASSWORD_SALT "$env:RUSTDESK_ADMIN_PASSWORD_SALT"
           "@
           Set-Content -Path ./res/msi/CustomActions/ManagedSecret.h -Value $managedSecretHeader -Encoding ascii
 
@@ -419,7 +429,9 @@ jobs:
 
   publish-release:
     name: publish-release
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release) ||
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '[release-r10]'))
     needs: [build-x64-msi]
     runs-on: ubuntu-22.04
     steps:
@@ -491,5 +503,5 @@ jobs:
             --repo "${{ github.repository }}" \
             --target "$SOURCE_SHA" \
             --title "RustDesk Managed ${MANAGED_VERSION}" \
-            --notes "Managed build ${MANAGED_BUILD}. Stable release. SHA-256: $MSI_SHA256"
+            --notes "Managed build ${MANAGED_BUILD}. Stable release. Supports optional MSI properties REMOTE_PASSWORD and ADMIN_PASSWORD for per-machine credential overrides. SHA-256: $MSI_SHA256"
 
