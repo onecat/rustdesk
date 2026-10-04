@@ -332,7 +332,9 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
   }
 
   Widget _card(BuildContext context, String title, IconData icon, Widget child) {
-    return Card(
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 270),
+      child: Card(
       elevation: 0,
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
@@ -439,159 +441,174 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
         _diskTotalBytes > 0 ? _diskTotalBytes - _diskAvailableBytes : 0;
     final diskPercent = _percent(diskUsed, _diskTotalBytes);
 
+    final deviceCard = _card(
+      context,
+      '设备信息',
+      Icons.computer_rounded,
+      Column(
+        children: [
+          _row('计算机名', _computerName, emphasize: true),
+          _row('用户名', _userName),
+          _row('Windows', _windowsVersion),
+          _row('Cat 版本', _version),
+          _row('Build', _build),
+        ],
+      ),
+    );
+
+    final remoteCard = _card(
+      context,
+      '远程访问',
+      Icons.security_rounded,
+      Column(
+        children: [
+          _row('RustDesk ID', id,
+              emphasize: true, trailing: _copyButton(id)),
+          _row('固定访问密码', _passwordSet ? '已启用' : '未配置'),
+          _row('IP Address', _ip.isEmpty ? '--' : _ip,
+              emphasize: true, trailing: _copyButton(_ip)),
+          _row('Direct Port', '21118'),
+        ],
+      ),
+    );
+
+    final systemCard = _card(
+      context,
+      '系统状态',
+      Icons.monitor_heart_outlined,
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_cpuBrand.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                _cpuBrand,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.color
+                      ?.withOpacity(0.7),
+                ),
+              ),
+            ),
+          _metric('CPU', _cpuUsage.toStringAsFixed(0) + '%', _cpuUsage),
+          _metric(
+            '内存',
+            _formatMemory(_memoryUsedBytes) +
+                ' / ' +
+                _formatMemory(_memoryTotalBytes),
+            memoryPercent,
+          ),
+          _metric(
+            '系统盘',
+            _diskTotalBytes <= 0
+                ? '--'
+                : _formatBytes(diskUsed) +
+                    ' / ' +
+                    _formatBytes(_diskTotalBytes),
+            diskPercent,
+          ),
+          _row('运行时间', _formatUptime(_uptimeSeconds)),
+        ],
+      ),
+    );
+
+    final runtimeCard = _card(
+      context,
+      '运行状态',
+      Icons.health_and_safety_outlined,
+      Column(
+        children: [
+          _row(
+            'RustDesk Service',
+            '',
+            trailing: _statusDot(
+              bind.mainGetOptionSync(key: 'stop-service') != 'Y',
+              '正常运行',
+              '服务停止',
+            ),
+          ),
+          _row(
+            'Server',
+            '',
+            trailing: _statusDot(
+              connectStatus == 1,
+              '已连接',
+              connectStatus == 0 ? '连接中' : '连接异常',
+            ),
+          ),
+          _row(
+            '更新通道',
+            'Stable' + (_version.isEmpty ? '' : ' / ' + _version),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              OutlinedButton.icon(
+                onPressed: id.isEmpty ? null : () => _copy(id),
+                icon: const Icon(Icons.badge_outlined, size: 18),
+                label: const Text('复制 ID'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: _ip.isEmpty ? null : () => _copy(_ip),
+                icon: const Icon(Icons.lan_outlined, size: 18),
+                label: const Text('复制 IP'),
+              ),
+              const Spacer(),
+              IconButton(
+                tooltip: '刷新状态',
+                onPressed: () {
+                  _refreshIp();
+                  _refreshSystemInfo();
+                },
+                icon: const Icon(Icons.refresh_rounded),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    Widget equalRow(Widget left, Widget right) {
+      return IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(child: left),
+            const SizedBox(width: 16),
+            Expanded(child: right),
+          ],
+        ),
+      );
+    }
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final twoColumns = constraints.maxWidth >= 840;
-          final width =
-              twoColumns ? (constraints.maxWidth - 16) / 2 : constraints.maxWidth;
-          return Wrap(
-            spacing: 16,
-            runSpacing: 16,
+          if (constraints.maxWidth >= 840) {
+            return Column(
+              children: [
+                equalRow(deviceCard, remoteCard),
+                const SizedBox(height: 16),
+                equalRow(systemCard, runtimeCard),
+              ],
+            );
+          }
+          return Column(
             children: [
-              SizedBox(
-                width: width,
-                child: _card(
-                  context,
-                  '设备信息',
-                  Icons.computer_rounded,
-                  Column(
-                    children: [
-                      _row('计算机名', _computerName, emphasize: true),
-                      _row('用户名', _userName),
-                      _row('Windows', _windowsVersion),
-                      _row('Cat 版本', _version),
-                      _row('Build', _build),
-                    ],
-                  ),
-                ),
-              ),
-              SizedBox(
-                width: width,
-                child: _card(
-                  context,
-                  '远程访问',
-                  Icons.security_rounded,
-                  Column(
-                    children: [
-                      _row('RustDesk ID', id,
-                          emphasize: true, trailing: _copyButton(id)),
-                      _row('固定访问密码', _passwordSet ? '已启用' : '未配置'),
-                      _row('IP Address', _ip.isEmpty ? '--' : _ip,
-                          emphasize: true, trailing: _copyButton(_ip)),
-                      _row('Direct Port', '21118'),
-                    ],
-                  ),
-                ),
-              ),
-              SizedBox(
-                width: width,
-                child: _card(
-                  context,
-                  '系统状态',
-                  Icons.monitor_heart_outlined,
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (_cpuBrand.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: Text(
-                            _cpuBrand,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.color
-                                  ?.withOpacity(0.7),
-                            ),
-                          ),
-                        ),
-                      _metric('CPU',
-                          _cpuUsage.toStringAsFixed(0) + '%', _cpuUsage),
-                      _metric(
-                        '内存',
-                        _formatMemory(_memoryUsedBytes) +
-                            ' / ' +
-                            _formatMemory(_memoryTotalBytes),
-                        memoryPercent,
-                      ),
-                      _metric(
-                        '系统盘',
-                        _diskTotalBytes <= 0
-                            ? '--'
-                            : _formatBytes(diskUsed) +
-                                ' / ' +
-                                _formatBytes(_diskTotalBytes),
-                        diskPercent,
-                      ),
-                      _row('运行时间', _formatUptime(_uptimeSeconds)),
-                    ],
-                  ),
-                ),
-              ),
-              SizedBox(
-                width: width,
-                child: _card(
-                  context,
-                  '运行状态',
-                  Icons.health_and_safety_outlined,
-                  Column(
-                    children: [
-                      _row(
-                        'RustDesk Service',
-                        '',
-                        trailing: _statusDot(
-                          bind.mainGetOptionSync(key: 'stop-service') != 'Y',
-                          '正常运行',
-                          '服务停止',
-                        ),
-                      ),
-                      _row(
-                        'Server',
-                        '',
-                        trailing: _statusDot(
-                          connectStatus == 1,
-                          '已连接',
-                          connectStatus == 0 ? '连接中' : '连接异常',
-                        ),
-                      ),
-                      _row(
-                        '更新通道',
-                        'Stable' + (_version.isEmpty ? '' : ' / ' + _version),
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          OutlinedButton.icon(
-                            onPressed: id.isEmpty ? null : () => _copy(id),
-                            icon: const Icon(Icons.badge_outlined, size: 18),
-                            label: const Text('复制 ID'),
-                          ),
-                          const SizedBox(width: 8),
-                          OutlinedButton.icon(
-                            onPressed: _ip.isEmpty ? null : () => _copy(_ip),
-                            icon: const Icon(Icons.lan_outlined, size: 18),
-                            label: const Text('复制 IP'),
-                          ),
-                          const Spacer(),
-                          IconButton(
-                            tooltip: '刷新状态',
-                            onPressed: () {
-                              _refreshIp();
-                              _refreshSystemInfo();
-                            },
-                            icon: const Icon(Icons.refresh_rounded),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+              deviceCard,
+              const SizedBox(height: 16),
+              remoteCard,
+              const SizedBox(height: 16),
+              systemCard,
+              const SizedBox(height: 16),
+              runtimeCard,
             ],
           );
         },

@@ -2,6 +2,12 @@ name: Build RustDesk Managed x64 MSI
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish the immutable Managed release after a successful build"
+        required: false
+        default: false
+        type: boolean
   push:
     branches:
       - rustdesk-managed-1.4.9-r9
@@ -413,6 +419,7 @@ jobs:
 
   publish-release:
     name: publish-release
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}
     needs: [build-x64-msi]
     runs-on: ubuntu-22.04
     steps:
