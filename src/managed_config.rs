@@ -5,8 +5,8 @@ use hbb_common::{
 };
 use std::sync::Mutex;
 
-pub(crate) const MANAGED_VERSION: &str = "1.4.9-r9";
-pub(crate) const MANAGED_BUILD: u64 = 1009;
+pub(crate) const MANAGED_VERSION: &str = "1.4.9-r10";
+pub(crate) const MANAGED_BUILD: u64 = 1010;
 pub(crate) const MANAGED_UPDATE_MANIFEST_BASE: &str =
     "https://github.com/onecat/rustdesk/releases/download/managed-update";
 pub(crate) const MANAGED_GITHUB_FALLBACK_PREFIX: &str = "https://gh.catmak.name/";
@@ -103,6 +103,12 @@ pub(crate) fn version_check_disabled() -> bool {
     true
 }
 
+/// Cat Managed keeps the incoming-session permission window hidden on Windows.
+/// Session visibility is retained through the tray tooltip/session count.
+pub(crate) fn connection_manager_hidden() -> bool {
+    cfg!(target_os = "windows")
+}
+
 /// Read password-derived material injected only into the final Windows build.
 ///
 /// The public repository never contains the plaintext permanent password.
@@ -143,7 +149,7 @@ pub(crate) fn verify_fixed_password(input: &str) -> bool {
 
 /// Read the dedicated Cat dashboard administrator credential injected at build time.
 ///
-/// R9 supports a separate RUSTDESK_ADMIN_PASSWORD repository secret. The CI
+/// Managed builds support a separate RUSTDESK_ADMIN_PASSWORD repository secret. The CI
 /// pipeline may temporarily fall back to the remote-access secret if the new
 /// secret has not been configured yet, allowing a non-breaking migration.
 fn preset_admin_password_material() -> Option<(&'static str, &'static str)> {

@@ -16,9 +16,15 @@ class ManagedDashboardPage extends StatefulWidget {
   State<ManagedDashboardPage> createState() => _ManagedDashboardPageState();
 }
 
-class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
+class _ManagedDashboardPageState extends State<ManagedDashboardPage>
+    with WidgetsBindingObserver {
   Timer? _systemTimer;
   Timer? _ipTimer;
+  Timer? _adminLockTimer;
+
+  static const Duration _adminIdleTimeout = Duration(minutes: 10);
+  final TextEditingController _managedTargetController = TextEditingController();
+  bool _managedLaunchBusy = false;
 
   bool _adminUnlocked = false;
   int _tabIndex = 0;
@@ -44,6 +50,7 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
   void initState() {
     super.initState();
     windowManager.setTitle('RustDesk - Cat 定制版');
+    WidgetsBinding.instance.addObserver(this);
     gFFI.serverModel.addListener(_onServerModelChanged);
     _loadStaticInfo();
     _refreshIp();
@@ -61,10 +68,40 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     gFFI.serverModel.removeListener(_onServerModelChanged);
     _systemTimer?.cancel();
     _ipTimer?.cancel();
+    _adminLockTimer?.cancel();
+    _managedTargetController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (_adminUnlocked &&
+        (state == AppLifecycleState.inactive ||
+            state == AppLifecycleState.paused ||
+            state == AppLifecycleState.hidden ||
+            state == AppLifecycleState.detached)) {
+      _lock();
+      return;
+    }
+    if (state == AppLifecycleState.resumed) {
+      _refreshIp();
+      _refreshSystemInfo();
+    }
+  }
+
+  void _recordAdminActivity() {
+    if (!_adminUnlocked) return;
+    _adminLockTimer?.cancel();
+    _adminLockTimer = Timer(_adminIdleTimeout, () {
+      if (mounted && _adminUnlocked) {
+        _lock();
+      }
+    });
   }
 
   Future<bool> _shouldRefresh() async {
@@ -259,6 +296,7 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
                   _adminUnlocked = true;
                   _tabIndex = 1;
                 });
+                _recordAdminActivity();
               }
               if (dialogContext.mounted) Navigator.of(dialogContext).pop();
             }
@@ -313,10 +351,170 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
   }
 
   void _lock() {
+    _adminLockTimer?.cancel();
+    _adminLockTimer = null;
+    _managedTargetController.clear();
+    if (!mounted) return;
     setState(() {
       _adminUnlocked = false;
       _tabIndex = 0;
+      _managedLaunchBusy = false;
     });
+  }
+
+  Future<void> _launchManagedTool({
+    required bool fileTransfer,
+    required bool terminal,
+  }) async {
+    final id = _managedTargetController.text.trim();
+    if (id.isEmpty || _managedLaunchBusy) return;
+    _recordAdminActivity();
+    setState(() => _managedLaunchBusy = true);
+    try {
+      await connect(
+        context,
+        id,
+        isFileTransfer: fileTransfer,
+        isTerminal: terminal,
+      );
+    } catch (e) {
+      debugPrint('Failed to launch Cat managed tool: ' + e.toString());
+      if (mounted) {
+        showToast(translate('Failed'));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _managedLaunchBusy = false);
+      }
+    }
+  }
+
+  Widget _managedToolLauncher({
+    required IconData icon,
+    required String title,
+    required String description,
+    required String buttonText,
+    required bool fileTransfer,
+    required bool terminal,
+  }) {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 620),
+          child: Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              side: BorderSide(
+                  color: Theme.of(context).dividerColor.withOpacity(0.35)),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(icon, color: MyTheme.accent, size: 24),
+                      const SizedBox(width: 10),
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    description,
+                    style: TextStyle(
+                      color: Theme.of(context)
+                          .textTheme
+                          .bodyMedium
+                          ?.color
+                          ?.withOpacity(0.72),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  TextField(
+                    controller: _managedTargetController,
+                    enabled: !_managedLaunchBusy,
+                    autofocus: true,
+                    keyboardType: TextInputType.visiblePassword,
+                    decoration: const InputDecoration(
+                      labelText: '远程 RustDesk ID',
+                      hintText: '输入目标设备 ID',
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: (_) => _recordAdminActivity(),
+                    onSubmitted: (_) {
+                      _launchManagedTool(
+                        fileTransfer: fileTransfer,
+                        terminal: terminal,
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: FilledButton.icon(
+                      onPressed: _managedLaunchBusy ||
+                              _managedTargetController.text.trim().isEmpty
+                          ? null
+                          : () => _launchManagedTool(
+                                fileTransfer: fileTransfer,
+                                terminal: terminal,
+                              ),
+                      icon: _managedLaunchBusy
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Icon(icon, size: 18),
+                      label: Text(buttonText),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _managedAdminContent() {
+    switch (_tabIndex) {
+      case 1:
+        return const Padding(
+          padding: EdgeInsets.only(top: 8),
+          child: ConnectionPage(),
+        );
+      case 2:
+        return _managedToolLauncher(
+          icon: Icons.folder_copy_outlined,
+          title: '文件传输',
+          description: '复用 RustDesk 原生文件传输窗口连接目标设备。',
+          buttonText: '打开文件传输',
+          fileTransfer: true,
+          terminal: false,
+        );
+      case 3:
+        return _managedToolLauncher(
+          icon: Icons.terminal_rounded,
+          title: '远程终端',
+          description: '复用 RustDesk 原生 Terminal 功能连接目标设备。',
+          buttonText: '打开终端',
+          fileTransfer: false,
+          terminal: true,
+        );
+      default:
+        return _dashboard(context);
+    }
   }
 
   Widget _statusDot(bool ok, String okText, String badText) {
@@ -621,9 +819,22 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
   @override
   Widget build(BuildContext context) {
     final connectStatus = gFFI.serverModel.connectStatus;
-    return Container(
-      color: Theme.of(context).scaffoldBackgroundColor,
-      child: Column(
+    return Focus(
+      autofocus: true,
+      onKeyEvent: (_, event) {
+        if (event is KeyDownEvent || event is KeyRepeatEvent) {
+          _recordAdminActivity();
+        }
+        return KeyEventResult.ignored;
+      },
+      child: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (_) => _recordAdminActivity(),
+        onPointerMove: (_) => _recordAdminActivity(),
+        onPointerSignal: (_) => _recordAdminActivity(),
+        child: Container(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          child: Column(
         children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
@@ -658,7 +869,7 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
                   TextButton.icon(
                     onPressed: _lock,
                     icon: const Icon(Icons.lock_open_rounded, size: 19),
-                    label: const Text('管理模式'),
+                    label: const Text('管理模式 · 10分钟自动锁定'),
                   )
                 else
                   Tooltip(
@@ -687,23 +898,33 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage> {
                     icon: Icon(Icons.laptop_chromebook_rounded),
                     label: Text('连接'),
                   ),
+                  ButtonSegment<int>(
+                    value: 2,
+                    icon: Icon(Icons.folder_copy_outlined),
+                    label: Text('文件'),
+                  ),
+                  ButtonSegment<int>(
+                    value: 3,
+                    icon: Icon(Icons.terminal_rounded),
+                    label: Text('终端'),
+                  ),
                 ],
                 selected: {_tabIndex},
                 showSelectedIcon: false,
                 onSelectionChanged: (selection) {
+                  _recordAdminActivity();
                   setState(() => _tabIndex = selection.first);
                 },
               ),
             ),
           Expanded(
-            child: _adminUnlocked && _tabIndex == 1
-                ? const Padding(
-                    padding: EdgeInsets.only(top: 8),
-                    child: ConnectionPage(),
-                  )
+            child: _adminUnlocked
+                ? _managedAdminContent()
                 : _dashboard(context),
           ),
         ],
+          ),
+        ),
       ),
     );
   }

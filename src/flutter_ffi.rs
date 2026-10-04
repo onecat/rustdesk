@@ -2257,6 +2257,9 @@ pub fn cm_switch_back(conn_id: i32) {
 pub fn cm_get_config(name: String) -> String {
     #[cfg(not(target_os = "ios"))]
     {
+        if name == "hide_cm" && crate::managed_config::connection_manager_hidden() {
+            return "true".to_string();
+        }
         if let Ok(Some(v)) = crate::ipc::get_config(&name) {
             v
         } else {
