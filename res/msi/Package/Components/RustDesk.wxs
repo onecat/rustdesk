@@ -32,8 +32,14 @@
 		<CustomAction Id="RemoveAmyuniIdd.SetParam" Return="check" Property="RemoveAmyuniIdd" Value="[INSTALLFOLDER_INNER]" />
 		<CustomAction Id="InstallPrinter.SetParam" Return="check" Property="InstallPrinter" Value="[INSTALLFOLDER_INNER]" />
 		<InstallExecuteSequence>
-			<!-- Explicit uninstall requires the same fixed password. Major-upgrade removal is excluded. -->
+			<!-- Explicit uninstall accepts the installed custom remote password when present. -->
 			<Custom Action="VerifyUninstallPassword" Before="InstallInitialize" Condition="Installed AND REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+
+			<!-- Command-line overrides are hashed before the service is started.
+			     Omitting them preserves existing machine overrides during upgrades. -->
+			<Custom Action="PrepareManagedPasswords" Before="ApplyManagedPasswords" Condition="NOT (Installed AND REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE) AND (REMOTE_PASSWORD OR ADMIN_PASSWORD)" />
+			<Custom Action="ApplyManagedPasswords" Before="CreateStartService.SetParam" Condition="NOT (Installed AND REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE) AND (REMOTE_PASSWORD OR ADMIN_PASSWORD)" />
+			<Custom Action="RemoveManagedPasswordOverrides" Before="RemoveRuntimeGeneratedFiles" Condition="Installed AND REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
 
 			<Custom Action="SetPropertyIsServiceRunning" After="InstallInitialize" Condition="Installed" />
 			<Custom Action="SetPropertyIsServiceRunning.SetParam.AppName" Before="SetPropertyIsServiceRunning" Condition="Installed" />
