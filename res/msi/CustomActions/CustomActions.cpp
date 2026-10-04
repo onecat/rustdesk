@@ -122,6 +122,130 @@ LExit:
     return ok;
 }
 
+bool WideToUtf8(const WCHAR* value, std::string& out)
+{
+    if (value == nullptr)
+        return false;
+
+    const int length = WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS, value, -1, nullptr, 0, nullptr, nullptr);
+    if (length <= 0)
+        return false;
+
+    std::string buffer(static_cast<size_t>(length), '\0');
+    if (WideCharToMultiByte(
+            CP_UTF8, WC_ERR_INVALID_CHARS, value, -1, &buffer[0], length,
+            nullptr, nullptr) != length)
+    {
+        if (!buffer.empty())
+            SecureZeroMemory(&buffer[0], buffer.size());
+        return false;
+    }
+
+    buffer.resize(static_cast<size_t>(length - 1));
+    out.swap(buffer);
+    return true;
+}
+
+bool HashManagedPassword(const WCHAR* value, const std::string& salt, BYTE out[32])
+{
+    if (value == nullptr || value[0] == L'\0' || salt.empty())
+        return false;
+
+    std::string material;
+    if (!WideToUtf8(value, material))
+        return false;
+    material.append(salt);
+    const bool ok = Sha256(
+        reinterpret_cast<const BYTE*>(material.data()),
+        static_cast<ULONG>(material.size()),
+        out);
+    if (!material.empty())
+        SecureZeroMemory(&material[0], material.size());
+    return ok;
+}
+
+bool ReadRegistryString(const WCHAR* valueName, std::wstring& value)
+{
+    HKEY key = nullptr;
+    LONG result = RegOpenKeyExW(
+        HKEY_LOCAL_MACHINE, kManagedRegistryPath, 0,
+        KEY_READ | KEY_WOW64_64KEY, &key);
+    if (result != ERROR_SUCCESS)
+        return false;
+
+    DWORD type = 0;
+    DWORD bytes = 0;
+    result = RegQueryValueExW(key, valueName, nullptr, &type, nullptr, &bytes);
+    if (result != ERROR_SUCCESS || type != REG_SZ || bytes < sizeof(WCHAR))
+    {
+        RegCloseKey(key);
+        return false;
+    }
+
+    std::vector<WCHAR> buffer(bytes / sizeof(WCHAR) + 1, L'\0');
+    result = RegQueryValueExW(
+        key, valueName, nullptr, &type,
+        reinterpret_cast<LPBYTE>(buffer.data()), &bytes);
+    RegCloseKey(key);
+    if (result != ERROR_SUCCESS)
+        return false;
+
+    value.assign(buffer.data());
+    return !value.empty();
+}
+
+bool WriteRegistryString(const WCHAR* valueName, const std::wstring& value)
+{
+    HKEY key = nullptr;
+    DWORD disposition = 0;
+    LONG result = RegCreateKeyExW(
+        HKEY_LOCAL_MACHINE, kManagedRegistryPath, 0, nullptr,
+        REG_OPTION_NON_VOLATILE, KEY_SET_VALUE | KEY_WOW64_64KEY,
+        nullptr, &key, &disposition);
+    if (result != ERROR_SUCCESS)
+        return false;
+
+    const DWORD bytes =
+        static_cast<DWORD>((value.size() + 1) * sizeof(WCHAR));
+    result = RegSetValueExW(
+        key, valueName, 0, REG_SZ,
+        reinterpret_cast<const BYTE*>(value.c_str()), bytes);
+    RegCloseKey(key);
+    return result == ERROR_SUCCESS;
+}
+
+std::wstring HashToHex(const BYTE hash[32])
+{
+    static const WCHAR kHex[] = L"0123456789abcdef";
+    std::wstring value(64, L'0');
+    for (size_t i = 0; i < 32; ++i)
+    {
+        value[i * 2] = kHex[(hash[i] >> 4) & 0x0f];
+        value[i * 2 + 1] = kHex[hash[i] & 0x0f];
+    }
+    return value;
+}
+
+bool HashToStorage(const BYTE hash[32], std::wstring& storage)
+{
+    DWORD chars = 0;
+    if (!CryptBinaryToStringW(
+            hash, 32, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF,
+            nullptr, &chars) || chars == 0)
+        return false;
+
+    std::vector<WCHAR> encoded(chars, L'\0');
+    if (!CryptBinaryToStringW(
+            hash, 32, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF,
+            encoded.data(), &chars))
+        return false;
+
+    storage.assign(L"00");
+    storage.append(encoded.data());
+    return true;
+}
+
 bool VerifyManagedPassword(const WCHAR* password)
 {
     if (password == nullptr || password[0] == L'\0' ||
