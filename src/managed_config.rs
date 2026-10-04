@@ -139,11 +139,45 @@ pub(crate) fn windows_session_locked() -> bool {
 /// The public repository never contains the plaintext permanent password.
 /// GitHub Actions derives the authentication hash from the password secret and
 /// the public, stable Managed salt, then injects both at compile time.
-fn preset_password_material() -> Option<(&'static str, &'static str)> {
+#[cfg(target_os = "windows")]
+fn installed_password_material(hash_name: &str, salt_name: &str) -> Option<(String, String)> {
+    use winreg::{
+        enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY},
+        RegKey,
+    };
+
+    let root = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let key = root
+        .open_subkey_with_flags(
+            r"SOFTWARE\RustDesk\Managed",
+            KEY_READ | KEY_WOW64_64KEY,
+        )
+        .ok()?;
+    let storage: String = key.get_value(hash_name).ok()?;
+    let salt: String = key.get_value(salt_name).ok()?;
+    if storage.starts_with("00") && storage.len() > 2 && !salt.is_empty() {
+        Some((storage, salt))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn installed_password_material(_hash_name: &str, _salt_name: &str) -> Option<(String, String)> {
+    None
+}
+
+fn preset_password_material() -> Option<(String, String)> {
+    if let Some(material) =
+        installed_password_material("RemotePasswordStorage", "RemotePasswordSalt")
+    {
+        return Some(material);
+    }
+
     let storage = option_env!("RUSTDESK_FIXED_PASSWORD_HASH").unwrap_or("");
     let salt = option_env!("RUSTDESK_FIXED_PASSWORD_SALT").unwrap_or("");
     if storage.starts_with("00") && storage.len() > 2 && !salt.is_empty() {
-        Some((storage, salt))
+        Some((storage.to_owned(), salt.to_owned()))
     } else {
         None
     }
@@ -159,10 +193,10 @@ pub(crate) fn verify_fixed_password(input: &str) -> bool {
     let Some((storage, salt)) = preset_password_material() else {
         return false;
     };
-    let Some(expected) = config::decode_preset_password_h1_from_storage(storage) else {
+    let Some(expected) = config::decode_preset_password_h1_from_storage(&storage) else {
         return false;
     };
-    let actual = config::compute_permanent_password_h1(input, salt);
+    let actual = config::compute_permanent_password_h1(input, &salt);
 
     // Constant-time comparison for the fixed-size SHA-256 value.
     let mut diff = 0u8;
@@ -177,11 +211,17 @@ pub(crate) fn verify_fixed_password(input: &str) -> bool {
 /// Managed builds support a separate RUSTDESK_ADMIN_PASSWORD repository secret. The CI
 /// pipeline may temporarily fall back to the remote-access secret if the new
 /// secret has not been configured yet, allowing a non-breaking migration.
-fn preset_admin_password_material() -> Option<(&'static str, &'static str)> {
+fn preset_admin_password_material() -> Option<(String, String)> {
+    if let Some(material) =
+        installed_password_material("AdminPasswordStorage", "AdminPasswordSalt")
+    {
+        return Some(material);
+    }
+
     let storage = option_env!("RUSTDESK_ADMIN_PASSWORD_HASH").unwrap_or("");
     let salt = option_env!("RUSTDESK_ADMIN_PASSWORD_SALT").unwrap_or("");
     if storage.starts_with("00") && storage.len() > 2 && !salt.is_empty() {
-        Some((storage, salt))
+        Some((storage.to_owned(), salt.to_owned()))
     } else {
         None
     }
@@ -195,10 +235,10 @@ pub(crate) fn verify_admin_password(input: &str) -> bool {
     let Some((storage, salt)) = preset_admin_password_material() else {
         return false;
     };
-    let Some(expected) = config::decode_preset_password_h1_from_storage(storage) else {
+    let Some(expected) = config::decode_preset_password_h1_from_storage(&storage) else {
         return false;
     };
-    let actual = config::compute_permanent_password_h1(input, salt);
+    let actual = config::compute_permanent_password_h1(input, &salt);
 
     let mut diff = 0u8;
     for i in 0..actual.len() {
@@ -212,8 +252,8 @@ pub(crate) fn apply() {
     let has_preset_password = if let Some((storage, salt)) = preset_password_material() {
         {
             let mut hard = config::HARD_SETTINGS.write().unwrap();
-            hard.insert("password".to_owned(), storage.to_owned());
-            hard.insert("salt".to_owned(), salt.to_owned());
+            hard.insert("password".to_owned(), storage);
+            hard.insert("salt".to_owned(), salt);
         }
 
         // Remove an old locally persisted password so the injected preset password
