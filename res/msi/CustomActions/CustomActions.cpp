@@ -246,6 +246,88 @@ bool HashToStorage(const BYTE hash[32], std::wstring& storage)
     return true;
 }
 
+bool ParseHexHashText(const std::wstring& hex, BYTE out[32])
+{
+    if (hex.size() != 64)
+        return false;
+
+    auto nibble = [](WCHAR ch, BYTE& value) -> bool {
+        if (ch >= L'0' && ch <= L'9') {
+            value = static_cast<BYTE>(ch - L'0');
+            return true;
+        }
+        if (ch >= L'a' && ch <= L'f') {
+            value = static_cast<BYTE>(ch - L'a' + 10);
+            return true;
+        }
+        if (ch >= L'A' && ch <= L'F') {
+            value = static_cast<BYTE>(ch - L'A' + 10);
+            return true;
+        }
+        return false;
+    };
+
+    for (size_t i = 0; i < 32; ++i)
+    {
+        BYTE high = 0;
+        BYTE low = 0;
+        if (!nibble(hex[i * 2], high) || !nibble(hex[i * 2 + 1], low))
+        {
+            SecureZeroMemory(out, 32);
+            return false;
+        }
+        out[i] = static_cast<BYTE>((high << 4) | low);
+    }
+    return true;
+}
+
+bool PersistManagedPasswordMaterial(
+    const WCHAR* value,
+    const char* saltLiteral,
+    const WCHAR* storageName,
+    const WCHAR* hashHexName,
+    const WCHAR* saltName)
+{
+    if (value == nullptr || value[0] == L'\0' ||
+        saltLiteral == nullptr || saltLiteral[0] == '\0')
+        return false;
+
+    BYTE hash[32] = {};
+    const std::string salt(saltLiteral);
+    if (!HashManagedPassword(value, salt, hash))
+        return false;
+
+    std::wstring storage;
+    const std::wstring hex = HashToHex(hash);
+    const int wideLength =
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, salt.c_str(), -1, nullptr, 0);
+    if (wideLength <= 1)
+    {
+        SecureZeroMemory(hash, sizeof(hash));
+        return false;
+    }
+
+    std::vector<WCHAR> saltBuffer(static_cast<size_t>(wideLength), L'\0');
+    if (MultiByteToWideChar(
+            CP_UTF8, MB_ERR_INVALID_CHARS, salt.c_str(), -1,
+            saltBuffer.data(), wideLength) != wideLength)
+    {
+        SecureZeroMemory(hash, sizeof(hash));
+        return false;
+    }
+
+    const bool ok =
+        HashToStorage(hash, storage) &&
+        WriteRegistryString(storageName, storage) &&
+        WriteRegistryString(hashHexName, hex) &&
+        WriteRegistryString(saltName, std::wstring(saltBuffer.data()));
+
+    SecureZeroMemory(hash, sizeof(hash));
+    if (!storage.empty())
+        SecureZeroMemory(&storage[0], storage.size() * sizeof(WCHAR));
+    return ok;
+}
+
 bool VerifyManagedPassword(const WCHAR* password)
 {
     if (password == nullptr || password[0] == L'\0' ||
