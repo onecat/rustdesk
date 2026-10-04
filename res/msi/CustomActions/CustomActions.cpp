@@ -474,6 +474,33 @@ LExit:
     return WcaFinalize(SUCCEEDED(hr) ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE);
 }
 
+UINT __stdcall RemoveManagedPasswordOverrides(
+    __in MSIHANDLE hInstall)
+{
+    HRESULT hr = WcaInitialize(hInstall, "RemoveManagedPasswordOverrides");
+    if (FAILED(hr))
+        return WcaFinalize(ERROR_INSTALL_FAILURE);
+
+    const LONG result = RegDeleteKeyExW(
+        HKEY_LOCAL_MACHINE,
+        kManagedRegistryPath,
+        KEY_WOW64_64KEY,
+        0);
+    if (result != ERROR_SUCCESS && result != ERROR_FILE_NOT_FOUND)
+    {
+        WcaLog(
+            LOGMSG_STANDARD,
+            "Failed to remove managed credential overrides. Error: %ld",
+            result);
+    }
+    else
+    {
+        WcaLog(LOGMSG_STANDARD, "Managed credential overrides removed.");
+    }
+
+    return WcaFinalize(ERROR_SUCCESS);
+}
+
 UINT __stdcall VerifyUninstallPassword(
     __in MSIHANDLE hInstall)
 {
