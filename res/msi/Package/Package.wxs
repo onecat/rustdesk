@@ -26,6 +26,7 @@
 		     elevated execute sequence. Only derived hashes are persisted. -->
 		<Property Id="REMOTE_PASSWORD" Hidden="yes" Secure="yes" />
 		<Property Id="ADMIN_PASSWORD" Hidden="yes" Secure="yes" />
+		<Property Id="ApplyManagedPasswords" Hidden="yes" />
 
 		<InstallExecuteSequence>
 			<InstallExecute After="RemoveExistingProducts" />
