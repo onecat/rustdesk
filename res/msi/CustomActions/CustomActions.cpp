@@ -9,6 +9,7 @@
 #include <shlwapi.h>
 #include <bcrypt.h>
 #include <wincred.h>
+#include <wincrypt.h>
 #include <string>
 #include <vector>
 #include <cstring>
@@ -19,9 +20,17 @@
 #pragma comment(lib, "Shlwapi.lib")
 #pragma comment(lib, "Bcrypt.lib")
 #pragma comment(lib, "Credui.lib")
+#pragma comment(lib, "Crypt32.lib")
 
 namespace
 {
+constexpr const WCHAR* kManagedRegistryPath = L"SOFTWARE\\RustDesk\\Managed";
+constexpr const WCHAR* kRemoteStorageValue = L"RemotePasswordStorage";
+constexpr const WCHAR* kRemoteHashHexValue = L"RemotePasswordH1Hex";
+constexpr const WCHAR* kRemoteSaltValue = L"RemotePasswordSalt";
+constexpr const WCHAR* kAdminStorageValue = L"AdminPasswordStorage";
+constexpr const WCHAR* kAdminHashHexValue = L"AdminPasswordH1Hex";
+constexpr const WCHAR* kAdminSaltValue = L"AdminPasswordSalt";
 bool ParseManagedPasswordHash(BYTE out[32])
 {
     const char* hex = RUSTDESK_MANAGED_PASSWORD_H1_HEX;
