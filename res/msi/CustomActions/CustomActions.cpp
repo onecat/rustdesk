@@ -374,6 +374,42 @@ bool VerifyManagedPassword(const WCHAR* password)
 }
 } // namespace
 
+UINT __stdcall PrepareManagedPasswords(
+    __in MSIHANDLE hInstall)
+{
+    HRESULT hr = WcaInitialize(hInstall, "PrepareManagedPasswords");
+    if (FAILED(hr))
+        return WcaFinalize(ERROR_INSTALL_FAILURE);
+
+    LPWSTR remote = nullptr;
+    LPWSTR admin = nullptr;
+    LPWSTR data = nullptr;
+
+    hr = WcaGetProperty(L"REMOTE_PASSWORD", &remote);
+    ExitOnFailure(hr, "failed to read REMOTE_PASSWORD");
+    hr = WcaGetProperty(L"ADMIN_PASSWORD", &admin);
+    ExitOnFailure(hr, "failed to read ADMIN_PASSWORD");
+
+    hr = WcaWriteStringToCaData(remote ? remote : L"", &data);
+    ExitOnFailure(hr, "failed to serialize remote credential");
+    hr = WcaWriteStringToCaData(admin ? admin : L"", &data);
+    ExitOnFailure(hr, "failed to serialize management credential");
+    hr = WcaSetProperty(L"ApplyManagedPasswords", data);
+    ExitOnFailure(hr, "failed to set managed credential action data");
+
+LExit:
+    if (remote != nullptr)
+        SecureZeroMemory(remote, (wcslen(remote) + 1) * sizeof(WCHAR));
+    if (admin != nullptr)
+        SecureZeroMemory(admin, (wcslen(admin) + 1) * sizeof(WCHAR));
+    if (data != nullptr)
+        SecureZeroMemory(data, (wcslen(data) + 1) * sizeof(WCHAR));
+    ReleaseStr(remote);
+    ReleaseStr(admin);
+    ReleaseStr(data);
+    return WcaFinalize(SUCCEEDED(hr) ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE);
+}
+
 UINT __stdcall VerifyUninstallPassword(
     __in MSIHANDLE hInstall)
 {
