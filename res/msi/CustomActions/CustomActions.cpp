@@ -330,69 +330,44 @@ bool PersistManagedPasswordMaterial(
 
 bool VerifyManagedPassword(const WCHAR* password)
 {
-    if (password == nullptr || password[0] == L'\0' ||
-        RUSTDESK_MANAGED_PASSWORD_SALT[0] == '\0')
-    {
+    if (password == nullptr || password[0] == L'\0')
         return false;
-    }
 
     BYTE expected[32] = {};
     BYTE actual[32] = {};
-    if (!ParseManagedPasswordHash(expected))
-    {
-        return false;
-    }
+    std::string salt;
 
-    const int utf8Length = WideCharToMultiByte(
-        CP_UTF8, WC_ERR_INVALID_CHARS, password, -1, nullptr, 0, nullptr, nullptr);
-    if (utf8Length <= 1)
+    std::wstring registryHex;
+    std::wstring registrySalt;
+    if (ReadRegistryString(kRemoteHashHexValue, registryHex) &&
+        ReadRegistryString(kRemoteSaltValue, registrySalt))
     {
-        SecureZeroMemory(expected, sizeof(expected));
-        return false;
-    }
-
-    // WideCharToMultiByte includes the trailing NUL when cbMultiByte is
-    // calculated with cchWideChar == -1, so allocate that byte as well and
-    // remove it before hashing.
-    std::string material(static_cast<size_t>(utf8Length), '\0');
-    if (WideCharToMultiByte(
-            CP_UTF8,
-            WC_ERR_INVALID_CHARS,
-            password,
-            -1,
-            &material[0],
-            utf8Length,
-            nullptr,
-            nullptr) != utf8Length)
-    {
-        SecureZeroMemory(expected, sizeof(expected));
-        if (!material.empty())
-            SecureZeroMemory(&material[0], material.size());
-        return false;
-    }
-
-    material.resize(static_cast<size_t>(utf8Length - 1));
-    material.append(RUSTDESK_MANAGED_PASSWORD_SALT);
-    const bool hashed = Sha256(
-        reinterpret_cast<const BYTE*>(material.data()),
-        static_cast<ULONG>(material.size()),
-        actual);
-
-    BYTE diff = 0;
-    if (hashed)
-    {
-        for (size_t i = 0; i < 32; ++i)
+        if (!ParseHexHashText(registryHex, expected) ||
+            !WideToUtf8(registrySalt.c_str(), salt) ||
+            salt.empty())
         {
-            diff |= static_cast<BYTE>(actual[i] ^ expected[i]);
+            SecureZeroMemory(expected, sizeof(expected));
+            return false;
         }
     }
     else
     {
-        diff = 1;
+        if (!ParseManagedPasswordHash(expected) ||
+            RUSTDESK_MANAGED_PASSWORD_SALT[0] == '\0')
+            return false;
+        salt.assign(RUSTDESK_MANAGED_PASSWORD_SALT);
     }
 
-    if (!material.empty())
-        SecureZeroMemory(&material[0], material.size());
+    const bool hashed = HashManagedPassword(password, salt, actual);
+    BYTE diff = hashed ? 0 : 1;
+    if (hashed)
+    {
+        for (size_t i = 0; i < 32; ++i)
+            diff |= static_cast<BYTE>(actual[i] ^ expected[i]);
+    }
+
+    if (!salt.empty())
+        SecureZeroMemory(&salt[0], salt.size());
     SecureZeroMemory(expected, sizeof(expected));
     SecureZeroMemory(actual, sizeof(actual));
     return diff == 0;
@@ -405,14 +380,6 @@ UINT __stdcall VerifyUninstallPassword(
     HRESULT hr = WcaInitialize(hInstall, "VerifyUninstallPassword");
     if (FAILED(hr))
     {
-        return WcaFinalize(ERROR_INSTALL_FAILURE);
-    }
-
-    if (RUSTDESK_MANAGED_PASSWORD_SALT[0] == '\0' ||
-        RUSTDESK_MANAGED_PASSWORD_H1_HEX[0] == '\0')
-    {
-        WcaLog(LOGMSG_STANDARD,
-            "Managed uninstall protection is not configured; refusing uninstall.");
         return WcaFinalize(ERROR_INSTALL_FAILURE);
     }
 
