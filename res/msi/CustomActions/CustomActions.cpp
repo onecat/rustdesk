@@ -410,6 +410,70 @@ LExit:
     return WcaFinalize(SUCCEEDED(hr) ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE);
 }
 
+UINT __stdcall ApplyManagedPasswords(
+    __in MSIHANDLE hInstall)
+{
+    HRESULT hr = WcaInitialize(hInstall, "ApplyManagedPasswords");
+    if (FAILED(hr))
+        return WcaFinalize(ERROR_INSTALL_FAILURE);
+
+    LPWSTR data = nullptr;
+    LPWSTR cursor = nullptr;
+    LPWSTR remote = nullptr;
+    LPWSTR admin = nullptr;
+
+    hr = WcaGetProperty(L"CustomActionData", &data);
+    ExitOnFailure(hr, "failed to read managed credential action data");
+
+    cursor = data;
+    hr = WcaReadStringFromCaData(&cursor, &remote);
+    ExitOnFailure(hr, "failed to deserialize remote credential");
+    hr = WcaReadStringFromCaData(&cursor, &admin);
+    ExitOnFailure(hr, "failed to deserialize management credential");
+
+    if (remote != nullptr && remote[0] != L'\0')
+    {
+        if (!PersistManagedPasswordMaterial(
+                remote,
+                RUSTDESK_MANAGED_PASSWORD_SALT,
+                kRemoteStorageValue,
+                kRemoteHashHexValue,
+                kRemoteSaltValue))
+        {
+            hr = E_FAIL;
+            ExitOnFailure(hr, "failed to persist custom remote credential material");
+        }
+        WcaLog(LOGMSG_STANDARD, "Custom remote credential material applied.");
+    }
+
+    if (admin != nullptr && admin[0] != L'\0')
+    {
+        if (!PersistManagedPasswordMaterial(
+                admin,
+                RUSTDESK_MANAGED_ADMIN_PASSWORD_SALT,
+                kAdminStorageValue,
+                kAdminHashHexValue,
+                kAdminSaltValue))
+        {
+            hr = E_FAIL;
+            ExitOnFailure(hr, "failed to persist custom management credential material");
+        }
+        WcaLog(LOGMSG_STANDARD, "Custom management credential material applied.");
+    }
+
+LExit:
+    if (remote != nullptr)
+        SecureZeroMemory(remote, (wcslen(remote) + 1) * sizeof(WCHAR));
+    if (admin != nullptr)
+        SecureZeroMemory(admin, (wcslen(admin) + 1) * sizeof(WCHAR));
+    if (data != nullptr)
+        SecureZeroMemory(data, (wcslen(data) + 1) * sizeof(WCHAR));
+    ReleaseStr(remote);
+    ReleaseStr(admin);
+    ReleaseStr(data);
+    return WcaFinalize(SUCCEEDED(hr) ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE);
+}
+
 UINT __stdcall VerifyUninstallPassword(
     __in MSIHANDLE hInstall)
 {
