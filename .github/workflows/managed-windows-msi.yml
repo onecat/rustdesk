@@ -90,7 +90,8 @@ jobs:
           $package = Get-Content ./res/msi/Package/Package.wxs -Raw
           $actions = Get-Content ./res/msi/Package/Fragments/CustomActions.wxs -Raw
           if ($package -notmatch 'Property Id="REMOTE_PASSWORD" Hidden="yes" Secure="yes"' -or
-              $package -notmatch 'Property Id="ADMIN_PASSWORD" Hidden="yes" Secure="yes"') {
+              $package -notmatch 'Property Id="ADMIN_PASSWORD" Hidden="yes" Secure="yes"' -or
+              $package -notmatch 'Property Id="ApplyManagedPasswords" Hidden="yes"') {
             throw "Managed MSI credential properties are missing or not protected"
           }
           if ($actions -notmatch 'Id="ApplyManagedPasswords".*HideTarget="yes"') {
