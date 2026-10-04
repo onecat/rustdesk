@@ -18,3 +18,8 @@ msiexec /i rustdesk-managed-1.4.9-r10-x86_64.msi /qn REMOTE_PASSWORD="<remote-pa
 The MSI properties are authored as hidden and secure. The installer persists only password-derived material and salts under the machine-wide Managed registry key; it does not persist the supplied plaintext values.
 
 Because command-line arguments can be observed by privileged local software while `msiexec` is running, deployment systems should avoid exposing command lines to untrusted users.
+
+
+## Release
+
+The stable R10 package is published from the exact CI artifact built from the release-trigger commit. The release tag is `managed-1.4.9-r10`.
