@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
+import 'package:flutter_hbb/desktop/managed/managed_diagnostics_page.dart';
+import 'package:flutter_hbb/desktop/managed/managed_lan_page.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -514,6 +516,10 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage>
           fileTransfer: false,
           terminal: true,
         );
+      case 4:
+        return const ManagedLanPage();
+      case 5:
+        return const ManagedDiagnosticsPage();
       default:
         return _dashboard(context);
     }
@@ -907,6 +913,16 @@ class _ManagedDashboardPageState extends State<ManagedDashboardPage>
                     value: 3,
                     icon: Icon(Icons.terminal_rounded),
                     label: Text('终端'),
+                  ),
+                  ButtonSegment<int>(
+                    value: 4,
+                    icon: Icon(Icons.radar_rounded),
+                    label: Text('局域网'),
+                  ),
+                  ButtonSegment<int>(
+                    value: 5,
+                    icon: Icon(Icons.health_and_safety_outlined),
+                    label: Text('诊断'),
                   ),
                 ],
                 selected: {_tabIndex},
