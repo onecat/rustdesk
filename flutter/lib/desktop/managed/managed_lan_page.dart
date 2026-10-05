@@ -48,7 +48,7 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
   void initState() {
     super.initState();
     _loadLastSeen();
-    _loadPeers();
+    _loadPeers(trustOnline: false);
     Future.delayed(const Duration(milliseconds: 350), () {
       if (mounted) _scan();
     });
@@ -104,7 +104,7 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
     }
   }
 
-  Future<void> _loadPeers() async {
+  Future<void> _loadPeers({bool trustOnline = true}) async {
     try {
       final raw = await bind.mainGetCommon(key: 'managed-lan-peers');
       final decoded = jsonDecode(raw);
@@ -125,7 +125,7 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
           }
         }
 
-        final online = item['online'] == true;
+        final online = trustOnline && item['online'] == true;
         if (online) _lastSeen[id] = now;
         peers.add(_ManagedLanPeer(
           id: id,
