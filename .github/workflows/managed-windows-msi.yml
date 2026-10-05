@@ -10,7 +10,7 @@ on:
         type: boolean
   push:
     branches:
-      - rustdesk-managed-1.4.9-r10
+      - rustdesk-managed-1.4.9-r11
     paths-ignore:
       - ".github/workflows/managed-windows-msi.yml"
 
@@ -31,8 +31,8 @@ env:
   VCPKG_TOOL_URL: "https://github.com/microsoft/vcpkg-tool/releases/download/2025-07-21/vcpkg.exe"
   VCPKG_TOOL_SHA256: "df8a0cba47ec0aff33ea377b66a5eef7397f8455a082a4dfad881fcc280e096d"
   VERSION: "1.4.9"
-  MANAGED_VERSION: "1.4.9-r10"
-  MANAGED_BUILD: "1010"
+  MANAGED_VERSION: "1.4.9-r11"
+  MANAGED_BUILD: "1011"
   MSI_REVISION_BASE: "30000000"
   # Public, stable salt for Managed permanent-password hashing. Keep unchanged
   # across future Managed releases so remembered peer credentials remain valid.
@@ -155,7 +155,10 @@ jobs:
           Push-Location ./flutter
           try {
             flutter pub get
-            flutter analyze --no-fatal-infos --no-fatal-warnings lib/desktop/managed/managed_dashboard.dart
+            flutter analyze --no-fatal-infos --no-fatal-warnings \
+              lib/desktop/managed/managed_dashboard.dart \
+              lib/desktop/managed/managed_lan_page.dart \
+              lib/desktop/managed/managed_diagnostics_page.dart
             if ($LASTEXITCODE -ne 0) {
               throw "Managed Flutter dashboard analysis failed"
             }
@@ -432,7 +435,7 @@ jobs:
     name: publish-release
     if: >-
       (github.event_name == 'workflow_dispatch' && inputs.publish_release) ||
-      (github.event_name == 'push' && contains(github.event.head_commit.message, '[release-r10]'))
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '[release-r11]'))
     needs: [build-x64-msi]
     runs-on: ubuntu-22.04
     steps:
