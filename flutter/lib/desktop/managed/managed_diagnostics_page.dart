@@ -329,6 +329,8 @@ $items | ConvertTo-Json -Compress
         return '升级程序已启动';
       case 'install-failed':
         return '安装失败';
+      case 'check-failed':
+        return '检查失败';
       case 'not-checked':
         return '尚未检查';
       default:
@@ -564,6 +566,8 @@ $items | ConvertTo-Json -Compress
           _updateState['downloaded'] == true ? '已下载' : '未下载',
         ),
         _kv('来源', _updateState['source']?.toString() ?? '--'),
+        if ((_updateState['last_error']?.toString() ?? '').isNotEmpty)
+          _kv('失败原因', _updateState['last_error'].toString()),
       ],
     );
   }
