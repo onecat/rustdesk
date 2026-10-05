@@ -5,8 +5,8 @@ use hbb_common::{
 };
 use std::sync::Mutex;
 
-pub(crate) const MANAGED_VERSION: &str = "1.4.9-r10";
-pub(crate) const MANAGED_BUILD: u64 = 1010;
+pub(crate) const MANAGED_VERSION: &str = "1.4.9-r11";
+pub(crate) const MANAGED_BUILD: u64 = 1011;
 pub(crate) const MANAGED_UPDATE_MANIFEST_BASE: &str =
     "https://github.com/onecat/rustdesk/releases/download/managed-update";
 pub(crate) const MANAGED_GITHUB_FALLBACK_PREFIX: &str = "https://gh.catmak.name/";
