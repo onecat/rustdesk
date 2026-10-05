@@ -155,10 +155,7 @@ jobs:
           Push-Location ./flutter
           try {
             flutter pub get
-            flutter analyze --no-fatal-infos --no-fatal-warnings \
-              lib/desktop/managed/managed_dashboard.dart \
-              lib/desktop/managed/managed_lan_page.dart \
-              lib/desktop/managed/managed_diagnostics_page.dart
+            flutter analyze --no-fatal-infos --no-fatal-warnings lib/desktop/managed/managed_dashboard.dart lib/desktop/managed/managed_lan_page.dart lib/desktop/managed/managed_diagnostics_page.dart
             if ($LASTEXITCODE -ne 0) {
               throw "Managed Flutter dashboard analysis failed"
             }
