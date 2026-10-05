@@ -75,6 +75,7 @@ struct ManagedUpdateState<'a> {
     downloaded: bool,
     source: Option<&'a str>,
     last_result: &'a str,
+    last_error: Option<&'a str>,
 }
 
 pub fn update_controlling_session_count(count: usize) {
@@ -156,7 +157,15 @@ fn start_auto_update_check_(rx_msg: Receiver<UpdateMsg>) {
             check_interval = normal_check_interval();
         }
         Err(e) => {
-            log::error!("Error checking for updates: {}", e);
+            let error = e.to_string();
+            log::error!("Error checking for updates: {}", error);
+            write_managed_state_with_error(
+                None,
+                false,
+                None,
+                "check-failed",
+                Some(&error),
+            );
             check_interval = RETRY_INTERVAL;
         }
     }
@@ -178,7 +187,15 @@ fn start_auto_update_check_(rx_msg: Receiver<UpdateMsg>) {
                         check_interval = RETRY_INTERVAL;
                     }
                     Err(e) => {
-                        log::error!("Error checking for updates: {}", e);
+                        let error = e.to_string();
+                        log::error!("Error checking for updates: {}", error);
+                        write_managed_state_with_error(
+                            None,
+                            false,
+                            None,
+                            "check-failed",
+                            Some(&error),
+                        );
                         check_interval = RETRY_INTERVAL;
                     }
                 }
@@ -561,6 +578,7 @@ pub fn managed_update_state_json() -> String {
             "downloaded": false,
             "source": serde_json::Value::Null,
             "last_result": "not-checked",
+            "last_error": serde_json::Value::Null,
         })
         .to_string()
     })
@@ -799,12 +817,19 @@ fn install_managed_package(payload: &ManagedManifestPayload, package_path: &Path
             Ok(())
         }
         Err(e) => {
-            write_managed_state(Some(payload), true, None, "install-failed");
+            let error = e.to_string();
+            write_managed_state_with_error(
+                Some(payload),
+                true,
+                None,
+                "install-failed",
+                Some(&error),
+            );
             bail!(
                 "Failed to install RustDesk Managed {} build {}: {}",
                 payload.version,
                 payload.build,
-                e
+                error
             )
         }
     }
@@ -816,6 +841,17 @@ fn write_managed_state(
     downloaded: bool,
     source: Option<&str>,
     result: &str,
+) {
+    write_managed_state_with_error(payload, downloaded, source, result, None);
+}
+
+#[cfg(target_os = "windows")]
+fn write_managed_state_with_error(
+    payload: Option<&ManagedManifestPayload>,
+    downloaded: bool,
+    source: Option<&str>,
+    result: &str,
+    error: Option<&str>,
 ) {
     let dir = managed_update_dir();
     if let Err(e) = fs::create_dir_all(&dir) {
@@ -836,6 +872,7 @@ fn write_managed_state(
         downloaded,
         source,
         last_result: result,
+        last_error: error,
     };
     match serde_json::to_vec_pretty(&state) {
         Ok(bytes) => {
