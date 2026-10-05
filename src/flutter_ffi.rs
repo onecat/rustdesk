@@ -2836,6 +2836,12 @@ pub fn main_get_common(key: String) -> String {
         return crate::managed_config::MANAGED_VERSION.to_owned();
     } else if key == "managed-build" {
         return crate::managed_config::MANAGED_BUILD.to_string();
+    } else if key == "managed-lan-peers" {
+        return crate::managed_config::managed_lan_peers_json();
+    } else if key == "managed-server-config" {
+        return crate::managed_config::managed_server_config_json();
+    } else if key == "managed-update-state" {
+        return crate::updater::managed_update_state_json();
     } else if key == "is-printer-installed" {
         #[cfg(target_os = "windows")]
         {
@@ -2925,6 +2931,13 @@ pub fn main_get_common_sync(key: String) -> SyncReturn<String> {
 }
 
 pub fn main_set_common(_key: String, _value: String) {
+    if _key == "managed-check-update" {
+        if let Err(e) = crate::updater::manually_check_update() {
+            log::warn!("Failed to request Managed update check: {}", e);
+        }
+        return;
+    }
+
     #[cfg(target_os = "windows")]
     if _key == "install-printer" && crate::platform::is_win_10_or_greater() {
         std::thread::spawn(move || {
