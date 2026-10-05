@@ -1151,6 +1151,12 @@ pub fn main_discover() {
     discover();
 }
 
+pub fn main_managed_check_update() {
+    if let Err(e) = crate::updater::manually_check_update() {
+        log::warn!("Failed to request Managed update check: {}", e);
+    }
+}
+
 pub fn main_get_api_server() -> String {
     get_api_server()
 }
@@ -2931,12 +2937,6 @@ pub fn main_get_common_sync(key: String) -> SyncReturn<String> {
 }
 
 pub fn main_set_common(_key: String, _value: String) {
-    if _key == "managed-check-update" {
-        if let Err(e) = crate::updater::manually_check_update() {
-            log::warn!("Failed to request Managed update check: {}", e);
-        }
-        return;
-    }
 
     #[cfg(target_os = "windows")]
     if _key == "install-printer" && crate::platform::is_win_10_or_greater() {
