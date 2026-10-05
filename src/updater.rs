@@ -159,6 +159,7 @@ fn start_auto_update_check_(rx_msg: Receiver<UpdateMsg>) {
         Err(e) => {
             let error = e.to_string();
             log::error!("Error checking for updates: {}", error);
+            #[cfg(target_os = "windows")]
             write_managed_state_with_error(
                 None,
                 false,
@@ -189,6 +190,7 @@ fn start_auto_update_check_(rx_msg: Receiver<UpdateMsg>) {
                     Err(e) => {
                         let error = e.to_string();
                         log::error!("Error checking for updates: {}", error);
+                        #[cfg(target_os = "windows")]
                         write_managed_state_with_error(
                             None,
                             false,
