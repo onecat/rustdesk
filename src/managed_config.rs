@@ -92,6 +92,43 @@ pub(crate) fn managed_system_info_json(refresh_disk: bool) -> String {
     .to_string()
 }
 
+/// Rich LAN peer cache for the Cat R11 management page. RustDesk's native
+/// discovery code already marks cached peers offline before each scan and
+/// merges multiple IP/MAC pairs for the same peer.
+pub(crate) fn managed_lan_peers_json() -> String {
+    let peers: Vec<serde_json::Value> = config::LanPeers::load()
+        .peers
+        .into_iter()
+        .map(|peer| {
+            serde_json::json!({
+                "id": peer.id,
+                "hostname": peer.hostname,
+                "username": peer.username,
+                "platform": peer.platform,
+                "online": peer.online,
+                "ip_mac": peer.ip_mac,
+            })
+        })
+        .collect();
+    serde_json::to_string(&peers).unwrap_or_else(|_| "[]".to_owned())
+}
+
+/// Expose the enforced Managed endpoints read-only to the R11 diagnostics UI.
+pub(crate) fn managed_server_config_json() -> String {
+    serde_json::json!({
+        "rendezvous": "rustdesk-server.catmak.name",
+        "rendezvous_port": 21116,
+        "relay": "rustdesk-relay.catmak.name",
+        "relay_port": 21117,
+        "api": "rustdesk-api.catmak.name",
+        "api_port": 443,
+        "direct_port": 21118,
+        "lan_discovery_reply": false,
+    })
+    .to_string()
+}
+
+
 
 /// This build intentionally locks its private-server policy.
 pub(crate) fn server_settings_locked() -> bool {
