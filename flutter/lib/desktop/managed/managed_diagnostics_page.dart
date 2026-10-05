@@ -295,7 +295,7 @@ $items | ConvertTo-Json -Compress
     setState(() => _checkingUpdate = true);
     final before = (_updateState['last_check_unix'] as num?)?.toInt() ?? 0;
     try {
-      await bind.mainSetCommon(key: 'managed-check-update', value: '');
+      await bind.mainManagedCheckUpdate();
       for (var i = 0; i < 12; i++) {
         await Future.delayed(const Duration(seconds: 1));
         if (!mounted) return;
