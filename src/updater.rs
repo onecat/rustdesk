@@ -548,6 +548,30 @@ fn managed_update_dir() -> PathBuf {
 }
 
 #[cfg(target_os = "windows")]
+pub fn managed_update_state_json() -> String {
+    let path = managed_update_dir().join("state.json");
+    fs::read_to_string(path).unwrap_or_else(|_| {
+        serde_json::json!({
+            "current_version": crate::managed_config::MANAGED_VERSION,
+            "current_build": crate::managed_config::MANAGED_BUILD,
+            "channel": crate::managed_config::managed_update_channel(),
+            "last_check_unix": 0,
+            "available_version": serde_json::Value::Null,
+            "available_build": serde_json::Value::Null,
+            "downloaded": false,
+            "source": serde_json::Value::Null,
+            "last_result": "not-checked",
+        })
+        .to_string()
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn managed_update_state_json() -> String {
+    "{}".to_owned()
+}
+
+#[cfg(target_os = "windows")]
 fn managed_cohort_id() -> ResultType<String> {
     let dir = managed_update_dir();
     fs::create_dir_all(&dir)?;
