@@ -465,10 +465,36 @@ $items | ConvertTo-Json -Compress
     );
   }
 
+  String _diagnosticSummary() {
+    if (_probes.isEmpty) return _runningDiagnostics ? '诊断中' : '未诊断';
+    for (final probe in _probes) {
+      if (probe.ok) continue;
+      if (probe.name != 'Direct' && probe.address.isEmpty) return 'DNS异常';
+      if (probe.name == 'ID Server') return 'ID Server异常';
+      if (probe.name == 'Relay') return 'Relay异常';
+      if (probe.name == 'API') return 'API异常';
+      if (probe.name == 'Direct') return 'Direct异常';
+    }
+    return gFFI.serverModel.connectStatus == 1 ? '正常' : 'Server连接异常';
+  }
+
   Widget _diagnosticSection() {
     final serverConnected = gFFI.serverModel.connectStatus == 1;
+    final summary = _diagnosticSummary();
+    final healthy = summary == '正常';
     return Column(
       children: [
+        _kv(
+          '诊断结果',
+          summary,
+          trailing: Icon(
+            healthy ? Icons.check_circle : Icons.info_outline,
+            size: 18,
+            color: healthy
+                ? const Color(0xFF2E9B65)
+                : const Color(0xFFD9A441),
+          ),
+        ),
         _kv(
           'RustDesk Server',
           serverConnected ? '已连接' : '未连接 / 连接中',
