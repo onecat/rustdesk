@@ -1182,6 +1182,12 @@ pub fn main_discover() {
     discover();
 }
 
+pub fn main_managed_check_update() {
+    if let Err(e) = crate::updater::manually_check_update() {
+        log::warn!("Failed to request Managed update check: {}", e);
+    }
+}
+
 pub fn main_get_api_server() -> String {
     get_api_server()
 }
@@ -1806,6 +1812,16 @@ pub fn main_set_permanent_password_with_result(password: String) -> bool {
     ui_interface::set_permanent_password_with_result(password)
 }
 
+/// Validate access to managed settings without exposing the fixed password.
+pub fn main_verify_managed_password(password: String) -> bool {
+    crate::managed_config::verify_fixed_password(&password)
+}
+
+/// Validate the Cat dashboard management password.
+pub fn main_verify_managed_admin_password(password: String) -> bool {
+    crate::managed_config::verify_admin_password(&password)
+}
+
 pub fn main_get_fingerprint() -> String {
     get_fingerprint()
 }
@@ -2287,6 +2303,9 @@ pub fn cm_switch_back(conn_id: i32) {
 pub fn cm_get_config(name: String) -> String {
     #[cfg(not(target_os = "ios"))]
     {
+        if name == "hide_cm" && crate::managed_config::connection_manager_hidden() {
+            return "true".to_string();
+        }
         if let Ok(Some(v)) = crate::ipc::get_config(&name) {
             v
         } else {
@@ -2345,6 +2364,10 @@ pub fn version_to_number(v: String) -> SyncReturn<i64> {
 
 pub fn option_synced() -> bool {
     crate::ui_interface::option_synced()
+}
+
+pub fn main_is_windows_session_locked() -> SyncReturn<bool> {
+    SyncReturn(crate::managed_config::windows_session_locked())
 }
 
 pub fn main_is_installed() -> SyncReturn<bool> {
@@ -2677,7 +2700,21 @@ pub fn main_get_printer_names() -> SyncReturn<String> {
 }
 
 pub fn main_get_common(key: String) -> String {
-    if key == "is-printer-installed" {
+    if key == "managed-system-info" {
+        return crate::managed_config::managed_system_info_json(false);
+    } else if key == "managed-system-info-with-disk" {
+        return crate::managed_config::managed_system_info_json(true);
+    } else if key == "managed-version" {
+        return crate::managed_config::MANAGED_VERSION.to_owned();
+    } else if key == "managed-build" {
+        return crate::managed_config::MANAGED_BUILD.to_string();
+    } else if key == "managed-lan-peers" {
+        return crate::managed_config::managed_lan_peers_json();
+    } else if key == "managed-server-config" {
+        return crate::managed_config::managed_server_config_json();
+    } else if key == "managed-update-state" {
+        return crate::updater::managed_update_state_json();
+    } else     if key == "is-printer-installed" {
         #[cfg(target_os = "windows")]
         {
             return match remote_printer::is_rd_printer_installed(&get_app_name()) {
