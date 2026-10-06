@@ -1,5 +1,6 @@
+use base::config::keys;
 use hbb_common::{
-    config::{self, keys, Config},
+    config::{self, Config},
     lazy_static,
     sysinfo::{Disks, System},
 };
