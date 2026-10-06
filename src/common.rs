@@ -2533,7 +2533,8 @@ pub fn read_custom_client(config: &str) {
                 .unwrap()
                 .insert(k, v.to_owned());
         };
-    }    crate::managed_config::apply();
+    }
+    crate::managed_config::apply();
 }
 
 
