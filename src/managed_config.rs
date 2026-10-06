@@ -92,7 +92,7 @@ pub(crate) fn managed_system_info_json(refresh_disk: bool) -> String {
     .to_string()
 }
 
-/// Rich LAN peer cache for the Cat R11 management page. RustDesk's native
+/// Rich LAN peer cache for the Cat Managed LAN page. RustDesk's native
 /// discovery code already marks cached peers offline before each scan and
 /// merges multiple IP/MAC pairs for the same peer.
 pub(crate) fn managed_lan_peers_json() -> String {
@@ -113,7 +113,7 @@ pub(crate) fn managed_lan_peers_json() -> String {
     serde_json::to_string(&peers).unwrap_or_else(|_| "[]".to_owned())
 }
 
-/// Expose the enforced Managed endpoints read-only to the R11 diagnostics UI.
+/// Expose the enforced Managed endpoints read-only to the Managed diagnostics UI.
 pub(crate) fn managed_server_config_json() -> String {
     serde_json::json!({
         "rendezvous": "rustdesk-server.catmak.name",
