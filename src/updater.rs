@@ -90,8 +90,6 @@ pub const MIN_INTERVAL: Duration = Duration::from_secs(60 * 10);
 pub const RETRY_INTERVAL: Duration = Duration::from_secs(60 * 30);
 
 const MANAGED_CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60 * 6);
-const RETRY_INTERVAL: Duration = Duration::from_secs(60 * 30);
-const MIN_INTERVAL: Duration = Duration::from_secs(60 * 10);
 const MANAGED_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const MANAGED_MANIFEST_TIMEOUT: Duration = Duration::from_secs(20);
 const MANAGED_PACKAGE_TIMEOUT: Duration = Duration::from_secs(60 * 10);
