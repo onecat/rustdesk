@@ -1,0 +1,486 @@
+name: Build RustDesk Managed x64 MSI
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish the immutable Managed release after a successful build"
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches:
+      - rustdesk-managed-1.5.0-r1
+    paths-ignore:
+      - ".github/workflows/managed-windows-msi.yml"
+
+concurrency:
+  group: rustdesk-managed-stable-release
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: write
+
+env:
+  SCITER_RUST_VERSION: "1.75"
+  LLVM_VERSION: "15.0.6"
+  FLUTTER_VERSION: "3.24.5"
+  VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
+  VCPKG_ROOT: "C:\\vcpkg"
+  VERSION: "1.5.0"
+  MANAGED_VERSION: "1.5.0-r1"
+  MANAGED_BUILD: "1012"
+  MSI_REVISION_BASE: "30000000"
+  # Public, stable salt for Managed permanent-password hashing. Keep unchanged
+  # across future Managed releases so remembered peer credentials remain valid.
+  MANAGED_PASSWORD_SALT: "sK4nag2LzkB7i5EjEAJJ7rHr+sMtZsAal6E77quYqrY="
+  # Separate stable salt for the local Cat management-mode credential.
+  MANAGED_ADMIN_PASSWORD_SALT: "9WDSC7xqUMpq/Tqt5E/IRFayB7e3aXbDLrRtISEHSto="
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+
+jobs:
+  generate-bridge:
+    uses: ./.github/workflows/bridge.yml
+
+  build-RustDeskTempTopMostWindow:
+    uses: ./.github/workflows/third-party-RustDeskTempTopMostWindow.yml
+    with:
+      upload-artifact: true
+      target: windows-2022
+      configuration: Release
+      platform: x64
+      target_version: Windows10
+
+  build-x64-msi:
+    name: windows-x64-msi
+    needs: [build-RustDeskTempTopMostWindow, generate-bridge]
+    runs-on: windows-2022
+
+    steps:
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Checkout source code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          submodules: recursive
+
+      - name: Validate Managed CI helper syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "./scripts/managed_ci_download.ps1").Path,
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "managed_ci_download.ps1 contains PowerShell syntax errors"
+          }
+          python -m py_compile ./scripts/managed_update_manifest.py
+          $package = Get-Content ./res/msi/Package/Package.wxs -Raw
+          $actions = Get-Content ./res/msi/Package/Fragments/CustomActions.wxs -Raw
+          if ($package -notmatch 'Property Id="REMOTE_PASSWORD" Hidden="yes" Secure="yes"' -or
+              $package -notmatch 'Property Id="ADMIN_PASSWORD" Hidden="yes" Secure="yes"' -or
+              $package -notmatch 'Property Id="ApplyManagedPasswords" Hidden="yes"') {
+            throw "Managed MSI credential properties are missing or not protected"
+          }
+          if ($actions -notmatch 'Id="ApplyManagedPasswords".*HideTarget="yes"') {
+            throw "Managed deferred credential action must hide its target"
+          }
+
+      - name: Validate Managed version metadata
+        shell: pwsh
+        run: |
+          $source = Get-Content ./src/managed_config.rs -Raw
+          $versionPattern = 'MANAGED_VERSION:\s*&str\s*=\s*"([^"]+)"'
+          $buildPattern = 'MANAGED_BUILD:\s*u64\s*=\s*([0-9]+)'
+          $versionMatch = [regex]::Match($source, $versionPattern)
+          $buildMatch = [regex]::Match($source, $buildPattern)
+          if (-not $versionMatch.Success -or $versionMatch.Groups[1].Value -ne "${{ env.MANAGED_VERSION }}") {
+            throw "MANAGED_VERSION in source does not match workflow metadata"
+          }
+          if (-not $buildMatch.Success -or $buildMatch.Groups[1].Value -ne "${{ env.MANAGED_BUILD }}") {
+            throw "MANAGED_BUILD in source does not match workflow metadata"
+          }
+
+      - name: Restore bridge files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: bridge-artifact
+          path: ./
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@2783a3f08e1baf891508463f8c6653c258246225
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          architecture: x64
+
+      - name: Replace engine with RustDesk custom Flutter engine
+        shell: pwsh
+        run: |
+          flutter doctor -v
+          flutter precache --windows
+          ./scripts/managed_ci_download.ps1 `
+            -Url "https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip" `
+            -OutFile "windows-x64-release.zip"
+          Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
+          Move-Item -Force windows-x64-release/* C:/hostedtoolcache/windows/flutter/stable-${{ env.FLUTTER_VERSION }}-x64/bin/cache/artifacts/engine/windows-x64-release/
+
+      - name: Patch Flutter
+        shell: bash
+        run: |
+          cp .github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff $(dirname $(dirname $(which flutter)))
+          cd $(dirname $(dirname $(which flutter)))
+          [[ "3.24.5" == "${{ env.FLUTTER_VERSION }}" ]] && git apply flutter_3.24.4_dropdown_menu_enableFilter.diff
+
+      - name: Analyze Managed Flutter dashboard
+        shell: pwsh
+        run: |
+          Push-Location ./flutter
+          try {
+            flutter pub get
+            flutter analyze --no-fatal-infos --no-fatal-warnings lib/desktop/managed/managed_dashboard.dart lib/desktop/managed/managed_lan_page.dart lib/desktop/managed/managed_diagnostics_page.dart
+            if ($LASTEXITCODE -ne 0) {
+              throw "Managed Flutter dashboard analysis failed"
+            }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: ${{ env.SCITER_RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          prefix-key: windows-2022
+
+      - name: Prepare pinned vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = $env:VCPKG_ROOT
+          $commit = $env:VCPKG_COMMIT_ID
+
+          $sourceReady = $false
+          if (Test-Path (Join-Path $root ".git")) {
+            for ($attempt = 1; $attempt -le 3 -and -not $sourceReady; $attempt++) {
+              Write-Host "vcpkg fetch attempt $attempt"
+              & git -C $root fetch --depth=1 origin $commit
+              if ($LASTEXITCODE -eq 0) {
+                & git -C $root checkout --force $commit
+                if ($LASTEXITCODE -eq 0) {
+                  $head = (& git -C $root rev-parse HEAD).Trim()
+                  $sourceReady = ($head -eq $commit)
+                }
+              }
+              if (-not $sourceReady) { Start-Sleep -Seconds (5 * $attempt) }
+            }
+          }
+
+          if (-not $sourceReady) {
+            Write-Warning "Pinned vcpkg git checkout unavailable; downloading exact commit archive."
+            if (Test-Path $root) { Remove-Item -Recurse -Force $root }
+            $archive = Join-Path $env:RUNNER_TEMP "vcpkg-source.zip"
+            $extract = Join-Path $env:RUNNER_TEMP "vcpkg-source"
+            if (Test-Path $extract) { Remove-Item -Recurse -Force $extract }
+            ./scripts/managed_ci_download.ps1 `
+              -Url "https://github.com/microsoft/vcpkg/archive/$commit.zip" `
+              -OutFile $archive
+            Expand-Archive -Path $archive -DestinationPath $extract
+            $dir = Get-ChildItem $extract -Directory | Select-Object -First 1
+            if (-not $dir) { throw "Failed to extract pinned vcpkg source." }
+            Move-Item $dir.FullName $root
+          }
+
+          & (Join-Path $root "bootstrap-vcpkg.bat") -disableMetrics
+          if ($LASTEXITCODE -ne 0) { throw "Pinned vcpkg bootstrap failed." }
+
+          & (Join-Path $root "vcpkg.exe") version --disable-metrics
+          if ($LASTEXITCODE -ne 0) { throw "Pinned vcpkg tool failed to start." }
+
+      - name: Install vcpkg dependencies with retry
+        shell: bash
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+        run: |
+          set -u
+          success=0
+          for attempt in 1 2 3; do
+            echo "vcpkg install attempt $attempt"
+            if "$VCPKG_ROOT/vcpkg.exe" install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"; then
+              success=1
+              break
+            fi
+            sleep $((attempt * 10))
+          done
+
+          if [ "$success" -ne 1 ]; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r log_file; do
+              echo "$log_file:"
+              cat "$log_file"
+            done
+            exit 1
+          fi
+          head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-x64-windows-static-rel-out.log" || true
+
+      - name: Prepare preset permanent password
+        shell: pwsh
+        env:
+          RUSTDESK_FIXED_PASSWORD: ${{ secrets.RUSTDESK_FIXED_PASSWORD }}
+          RUSTDESK_ADMIN_PASSWORD: ${{ secrets.RUSTDESK_ADMIN_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrEmpty($env:RUSTDESK_FIXED_PASSWORD)) {
+            throw "Repository secret RUSTDESK_FIXED_PASSWORD is required"
+          }
+
+          $salt = $env:MANAGED_PASSWORD_SALT
+          if ([string]::IsNullOrWhiteSpace($salt)) {
+            throw "MANAGED_PASSWORD_SALT must be configured"
+          }
+          try {
+            $saltBytes = [Convert]::FromBase64String($salt)
+          } catch {
+            throw "MANAGED_PASSWORD_SALT must be valid Base64"
+          }
+          if ($saltBytes.Length -ne 32) {
+            throw "MANAGED_PASSWORD_SALT must decode to exactly 32 bytes"
+          }
+
+          $material = [Text.Encoding]::UTF8.GetBytes($env:RUSTDESK_FIXED_PASSWORD + $salt)
+          $sha = [System.Security.Cryptography.SHA256]::Create()
+          try {
+            $h1 = $sha.ComputeHash($material)
+          } finally {
+            $sha.Dispose()
+          }
+          $storage = "00" + [Convert]::ToBase64String($h1)
+          $h1Hex = [Convert]::ToHexString($h1).ToLowerInvariant()
+
+          Write-Output "::add-mask::$storage"
+          Write-Output "::add-mask::$salt"
+          Write-Output "::add-mask::$h1Hex"
+          Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_FIXED_PASSWORD_HASH=$storage"
+          Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_FIXED_PASSWORD_SALT=$salt"
+          Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_FIXED_PASSWORD_H1_HEX=$h1Hex"
+
+          $adminPassword = $env:RUSTDESK_ADMIN_PASSWORD
+          if ([string]::IsNullOrEmpty($adminPassword)) {
+            Write-Warning "RUSTDESK_ADMIN_PASSWORD is not configured; Managed management mode temporarily uses the remote-access password."
+            $adminPassword = $env:RUSTDESK_FIXED_PASSWORD
+          }
+
+          $adminSalt = $env:MANAGED_ADMIN_PASSWORD_SALT
+          try {
+            $adminSaltBytes = [Convert]::FromBase64String($adminSalt)
+          } catch {
+            throw "MANAGED_ADMIN_PASSWORD_SALT must be valid Base64"
+          }
+          if ($adminSaltBytes.Length -ne 32) {
+            throw "MANAGED_ADMIN_PASSWORD_SALT must decode to exactly 32 bytes"
+          }
+
+          $adminMaterial = [Text.Encoding]::UTF8.GetBytes($adminPassword + $adminSalt)
+          $adminSha = [System.Security.Cryptography.SHA256]::Create()
+          try {
+            $adminH1 = $adminSha.ComputeHash($adminMaterial)
+          } finally {
+            $adminSha.Dispose()
+          }
+          $adminStorage = "00" + [Convert]::ToBase64String($adminH1)
+
+          Write-Output "::add-mask::$adminStorage"
+          Write-Output "::add-mask::$adminSalt"
+          Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_ADMIN_PASSWORD_HASH=$adminStorage"
+          Add-Content -Path $env:GITHUB_ENV -Value "RUSTDESK_ADMIN_PASSWORD_SALT=$adminSalt"
+
+      - name: Build RustDesk x64
+        shell: pwsh
+        run: |
+          python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram
+          Move-Item ./flutter/build/windows/x64/runner/Release ./rustdesk
+
+          ./scripts/managed_ci_download.ps1 -Url "https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip" -OutFile "usbmmidd_v2.zip"
+          Expand-Archive usbmmidd_v2.zip -DestinationPath .
+          Remove-Item -Path usbmmidd_v2\Win32 -Recurse
+          Remove-Item -Path "usbmmidd_v2\deviceinstaller64.exe", "usbmmidd_v2\deviceinstaller.exe", "usbmmidd_v2\usbmmidd.bat"
+          Move-Item -Force .\usbmmidd_v2 ./rustdesk
+
+          try {
+            ./scripts/managed_ci_download.ps1 -Url "https://github.com/rustdesk/hbb_common/releases/download/driver/rustdesk_printer_driver_v4-1.4.zip" -OutFile "rustdesk_printer_driver_v4-1.4.zip"
+            ./scripts/managed_ci_download.ps1 -Url "https://github.com/rustdesk/hbb_common/releases/download/driver/printer_driver_adapter.zip" -OutFile "printer_driver_adapter.zip"
+            ./scripts/managed_ci_download.ps1 -Url "https://github.com/rustdesk/hbb_common/releases/download/driver/sha256sums" -OutFile "sha256sums"
+
+            $checksumDriver = (Select-String -Path .\sha256sums -Pattern '^([a-fA-F0-9]{64}) \*rustdesk_printer_driver_v4-1.4\.zip$').Matches.Groups[1].Value
+            $downloadDriver = (Get-FileHash -Path rustdesk_printer_driver_v4-1.4.zip -Algorithm SHA256).Hash
+            $checksumAdapter = (Select-String -Path .\sha256sums -Pattern '^([a-fA-F0-9]{64}) \*printer_driver_adapter\.zip$').Matches.Groups[1].Value
+            $downloadAdapter = (Get-FileHash -Path printer_driver_adapter.zip -Algorithm SHA256).Hash
+
+            if ($checksumDriver -eq $downloadDriver -and $checksumAdapter -eq $downloadAdapter) {
+              Expand-Archive rustdesk_printer_driver_v4-1.4.zip -DestinationPath .
+              New-Item -ItemType Directory -Force ./rustdesk/drivers | Out-Null
+              Move-Item -Force .\rustdesk_printer_driver_v4-1.4 ./rustdesk/drivers/RustDeskPrinterDriver
+              Expand-Archive printer_driver_adapter.zip -DestinationPath .
+              Move-Item -Force .\printer_driver_adapter.dll ./rustdesk
+            }
+          } catch {
+            Write-Host "Printer driver download is optional; continuing without it."
+          }
+
+      - name: Restore RustDeskTempTopMostWindow artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: topmostwindow-artifacts-x64
+          path: ./rustdesk
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce
+        with: {}
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          $managedSecretHeader = @"
+          #pragma once
+          #define RUSTDESK_MANAGED_PASSWORD_SALT "$env:RUSTDESK_FIXED_PASSWORD_SALT"
+          #define RUSTDESK_MANAGED_PASSWORD_H1_HEX "$env:RUSTDESK_FIXED_PASSWORD_H1_HEX"
+          #define RUSTDESK_MANAGED_ADMIN_PASSWORD_SALT "$env:RUSTDESK_ADMIN_PASSWORD_SALT"
+          "@
+          Set-Content -Path ./res/msi/CustomActions/ManagedSecret.h -Value $managedSecretHeader -Encoding ascii
+
+          $msiRevision = [int64]$env:MSI_REVISION_BASE + [int64]$env:MANAGED_BUILD
+          if ($msiRevision -le 29833134) {
+            throw "MSI revision $msiRevision must be greater than r4 revision 29833134"
+          }
+
+          Push-Location ./res/msi
+          python preprocess.py --arp --revision-version $msiRevision -d ../../rustdesk
+          nuget restore msi.sln
+          msbuild msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
+          $msi = Get-ChildItem ./Package/bin/*/Release/en-us/Package.msi | Select-Object -First 1
+          if (-not $msi) { throw "Package.msi was not produced" }
+          Pop-Location
+
+          New-Item -ItemType Directory -Force ./Artifacts | Out-Null
+          $artifactName = "rustdesk-managed-${{ env.MANAGED_VERSION }}-x86_64.msi"
+          $artifactPath = Join-Path ./Artifacts $artifactName
+          Move-Item $msi.FullName $artifactPath
+          $hash = (Get-FileHash $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $size = (Get-Item $artifactPath).Length
+          Write-Host "MSI SHA256: $hash"
+          Write-Host "MSI size: $size"
+
+          $metadata = [ordered]@{
+            version = "${{ env.MANAGED_VERSION }}"
+            build = [int64]"${{ env.MANAGED_BUILD }}"
+            source_sha = "${{ github.sha }}"
+            msi_revision = $msiRevision
+            msi_product_version = "${{ env.VERSION }}.$msiRevision"
+            msi_file = $artifactName
+            sha256 = $hash
+            size = $size
+          }
+          $metadata | ConvertTo-Json | Set-Content ./Artifacts/managed-build.json -Encoding utf8
+
+      - name: Upload MSI
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rustdesk-managed-${{ env.MANAGED_VERSION }}-x86_64-msi
+          path: |
+            ./Artifacts/rustdesk-managed-${{ env.MANAGED_VERSION }}-x86_64.msi
+            ./Artifacts/managed-build.json
+          if-no-files-found: error
+
+  publish-release:
+    name: publish-release
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}
+    needs: [build-x64-msi]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download exact MSI artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: rustdesk-managed-${{ env.MANAGED_VERSION }}-x86_64-msi
+          path: release-input
+
+      - name: Validate release artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, pathlib
+          root = pathlib.Path("release-input")
+          meta = json.loads((root / "managed-build.json").read_text(encoding="utf-8-sig"))
+          expected_version = os.environ["MANAGED_VERSION"]
+          expected_build = int(os.environ["MANAGED_BUILD"])
+          expected_revision = int(os.environ["MSI_REVISION_BASE"]) + expected_build
+          if meta.get("version") != expected_version:
+              raise SystemExit("managed-build.json version mismatch")
+          if int(meta.get("build", -1)) != expected_build:
+              raise SystemExit("managed-build.json build mismatch")
+          if int(meta.get("msi_revision", -1)) != expected_revision:
+              raise SystemExit("managed-build.json MSI revision mismatch")
+          expected_product_version = f"{os.environ['VERSION']}.{expected_revision}"
+          if str(meta.get("msi_product_version", "")) != expected_product_version:
+              raise SystemExit("managed-build.json MSI ProductVersion mismatch")
+          if expected_revision <= 29833134:
+              raise SystemExit("Managed MSI revision is not newer than r4")
+          msi = root / str(meta.get("msi_file", ""))
+          if not msi.is_file():
+              raise SystemExit("MSI listed in managed-build.json is missing")
+          data = msi.read_bytes()
+          digest = hashlib.sha256(data).hexdigest()
+          if digest.lower() != str(meta.get("sha256", "")).lower():
+              raise SystemExit("MSI SHA256 mismatch")
+          if len(data) != int(meta.get("size", -1)):
+              raise SystemExit("MSI size mismatch")
+          source_sha = str(meta.get("source_sha", ""))
+          if len(source_sha) != 40 or any(ch not in "0123456789abcdefABCDEF" for ch in source_sha):
+              raise SystemExit("source_sha is invalid")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
+              fh.write(f"MSI_FILE={msi.name}\n")
+              fh.write(f"MSI_SHA256={digest}\n")
+              fh.write(f"SOURCE_SHA={source_sha}\n")
+          (root / f"{msi.name}.sha256").write_text(
+              f"{digest}  {msi.name}\n",
+              encoding="ascii",
+          )
+          PY
+
+      - name: Publish immutable Managed Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="managed-${MANAGED_VERSION}"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $TAG already exists. Refusing to replace an immutable Managed release."
+            exit 1
+          fi
+          gh release create "$TAG" \
+            "release-input/$MSI_FILE" \
+            "release-input/$MSI_FILE.sha256" \
+            "release-input/managed-build.json" \
+            --repo "${{ github.repository }}" \
+            --target "$SOURCE_SHA" \
+            --title "RustDesk Managed ${MANAGED_VERSION}" \
+            --notes "Managed build ${MANAGED_BUILD}, based on RustDesk 1.5.0. Supports optional MSI properties REMOTE_PASSWORD and ADMIN_PASSWORD for per-machine credential overrides. SHA-256: $MSI_SHA256"
+
