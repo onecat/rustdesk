@@ -1031,6 +1031,9 @@ pub fn check_software_update() {
 // Because the url is always `https://api.rustdesk.com/version/latest`.
 #[tokio::main(flavor = "current_thread")]
 pub async fn do_check_software_update() -> hbb_common::ResultType<()> {
+    if crate::managed_config::version_check_disabled() {
+        return Ok(());
+    }
     let (request, url) =
         hbb_common::version_check_request(hbb_common::VER_TYPE_RUSTDESK_CLIENT.to_string());
     let proxy_conf = Config::get_socks();
@@ -2358,6 +2361,7 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
 }
 
 pub fn load_custom_client() {
+    crate::managed_config::apply();
     #[cfg(debug_assertions)]
     if let Ok(data) = std::fs::read_to_string("./custom.txt") {
         read_custom_client(data.trim());
@@ -2456,6 +2460,10 @@ pub fn get_dst_align_rgba() -> usize {
 }
 
 pub fn read_custom_client(config: &str) {
+    // Apply once before parsing so invalid/early-return custom data cannot bypass
+    // this build's policy. A second application below restores the enforced values
+    // after a valid custom payload has been parsed.
+    crate::managed_config::apply();
     let Ok(data) = decode64(config) else {
         log::error!("Failed to decode custom client config");
         return;
