@@ -2533,8 +2533,9 @@ pub fn read_custom_client(config: &str) {
                 .unwrap()
                 .insert(k, v.to_owned());
         };
-    }
+    }    crate::managed_config::apply();
 }
+
 
 #[inline]
 pub fn is_empty_uni_link(arg: &str) -> bool {
