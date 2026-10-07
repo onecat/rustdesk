@@ -550,8 +550,8 @@ $items | ConvertTo-Json -Compress
         _kv(
           'LAN Discovery',
           _serverConfig['lan_discovery_reply'] == false
-              ? '单向发现（本机不响应扫描）'
-              : '双向发现',
+              ? '单向发现'
+              : '双向发现（Cat 设备可互相发现）',
         ),
       ],
     );
