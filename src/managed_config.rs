@@ -4,10 +4,10 @@ use hbb_common::{
     lazy_static,
     sysinfo::{Disks, System},
 };
-use std::sync::Mutex;
+use std::{net::Ipv4Addr, sync::Mutex};
 
 pub(crate) const MANAGED_VERSION: &str = "1.5.0-r1";
-pub(crate) const MANAGED_BUILD: u64 = 1012;
+pub(crate) const MANAGED_BUILD: u64 = 1013;
 pub(crate) const MANAGED_UPDATE_MANIFEST_BASE: &str =
     "https://github.com/onecat/rustdesk/releases/download/managed-update";
 pub(crate) const MANAGED_GITHUB_FALLBACK_PREFIX: &str = "https://gh.catmak.name/";
@@ -93,6 +93,56 @@ pub(crate) fn managed_system_info_json(refresh_disk: bool) -> String {
     .to_string()
 }
 
+/// Pick the most useful IPv4 address for direct LAN access.
+/// Prefer an address sharing the longest local subnet prefix; fall back to a
+/// private/link-local address when no local subnet matches.
+fn preferred_lan_ipv4(ip_mac: &std::collections::HashMap<String, String>) -> String {
+    let interfaces = default_net::get_interfaces();
+    let mut candidates: Vec<Ipv4Addr> = ip_mac
+        .keys()
+        .filter_map(|ip| ip.parse::<Ipv4Addr>().ok())
+        .filter(|ip| !ip.is_loopback() && !ip.is_unspecified() && !ip.is_multicast())
+        .collect();
+    candidates.sort_by_key(|ip| u32::from(*ip));
+    candidates.dedup();
+
+    let mut best: Option<(u32, u32, Ipv4Addr)> = None;
+    for candidate in candidates {
+        let candidate_num = u32::from(candidate);
+        let mut score = if candidate.is_private() {
+            100
+        } else if candidate.is_link_local() {
+            20
+        } else {
+            10
+        };
+
+        for interface in &interfaces {
+            for local in &interface.ipv4 {
+                if local.addr.is_loopback() || local.addr.is_unspecified() {
+                    continue;
+                }
+                let mask = u32::from(local.netmask);
+                if mask != 0 && (candidate_num & mask) == (u32::from(local.addr) & mask) {
+                    score = score.max(1000 + mask.count_ones());
+                }
+            }
+        }
+
+        match best {
+            None => best = Some((score, candidate_num, candidate)),
+            Some((best_score, best_num, _))
+                if score > best_score || (score == best_score && candidate_num < best_num) =>
+            {
+                best = Some((score, candidate_num, candidate));
+            }
+            _ => {}
+        }
+    }
+
+    best.map(|(_, _, ip)| ip.to_string()).unwrap_or_default()
+}
+
 /// Rich LAN peer cache for the Cat Managed LAN page. RustDesk's native
 /// discovery code already marks cached peers offline before each scan and
 /// merges multiple IP/MAC pairs for the same peer.
@@ -101,12 +151,14 @@ pub(crate) fn managed_lan_peers_json() -> String {
         .peers
         .into_iter()
         .map(|peer| {
+            let preferred_ip = preferred_lan_ipv4(&peer.ip_mac);
             serde_json::json!({
                 "id": peer.id,
                 "hostname": peer.hostname,
                 "username": peer.username,
                 "platform": peer.platform,
                 "online": peer.online,
+                "preferred_ip": preferred_ip,
                 "ip_mac": peer.ip_mac,
             })
         })
@@ -124,7 +176,7 @@ pub(crate) fn managed_server_config_json() -> String {
         "api": "rustdesk-api.catmak.name",
         "api_port": 443,
         "direct_port": 21118,
-        "lan_discovery_reply": false,
+        "lan_discovery_reply": true,
     })
     .to_string()
 }
@@ -329,7 +381,7 @@ pub(crate) fn apply() {
                 "LmNVkrH1xApjMUUdBggKBz9NCieG+jBS8te9pmrdZcQ=",
             ),
             (keys::OPTION_ALLOW_AUTO_UPDATE, "N"),
-            (keys::OPTION_ENABLE_LAN_DISCOVERY, "N"),
+            (keys::OPTION_ENABLE_LAN_DISCOVERY, "Y"),
             (keys::OPTION_DIRECT_SERVER, "Y"),
             (keys::OPTION_DIRECT_ACCESS_PORT, "21118"),
             (keys::OPTION_ALLOW_REMOTE_CONFIG_MODIFICATION, "Y"),
