@@ -78,7 +78,7 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
         }
       }
     } catch (e) {
-      debugPrint('Failed to load R11 LAN last-seen cache: $e');
+      debugPrint('Failed to load Managed LAN last-seen cache: $e');
     }
   }
 
@@ -93,7 +93,7 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
         v: jsonEncode(data),
       );
     } catch (e) {
-      debugPrint('Failed to save R11 LAN last-seen cache: $e');
+      debugPrint('Failed to save Managed LAN last-seen cache: $e');
     }
   }
 
@@ -177,7 +177,7 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
         });
       }
     } catch (e) {
-      debugPrint('R11 LAN discovery failed: $e');
+      debugPrint('Managed LAN discovery failed: $e');
     } finally {
       if (mounted) setState(() => _scanning = false);
     }
