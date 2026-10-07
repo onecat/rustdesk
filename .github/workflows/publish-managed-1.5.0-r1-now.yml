@@ -1,0 +1,79 @@
+name: Publish RustDesk Managed 1.5.0-r1 Now
+
+on:
+  push:
+    branches:
+      - rustdesk-managed-1.5.0-r1
+    paths:
+      - ".github/workflows/publish-managed-1.5.0-r1-now.yml"
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download tested Build 1014 artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-input
+          gh run download 37584899122 \
+            --repo "${{ github.repository }}" \
+            --name "rustdesk-managed-1.5.0-r1-x86_64-msi" \
+            --dir release-input
+
+      - name: Validate exact tested artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, pathlib
+          root = pathlib.Path("release-input")
+          meta = json.loads((root / "managed-build.json").read_text(encoding="utf-8-sig"))
+          expected = {
+              "version": "1.5.0-r1",
+              "build": 1014,
+              "source_sha": "f9b9502dcc3bf59adfe7c4f7f6abb32cb9f20920",
+              "msi_revision": 30001014,
+              "msi_product_version": "1.5.0.30001014",
+              "msi_file": "rustdesk-managed-1.5.0-r1-x86_64.msi",
+              "sha256": "84700b552d85fc5b488d52136a417baab6abe6b1f35663b8681faa6f8a5e8aa1",
+              "size": 26009600,
+          }
+          for key, value in expected.items():
+              if meta.get(key) != value:
+                  raise SystemExit(f"{key} mismatch: {meta.get(key)!r} != {value!r}")
+          msi = root / expected["msi_file"]
+          data = msi.read_bytes()
+          digest = hashlib.sha256(data).hexdigest()
+          if digest != expected["sha256"] or len(data) != expected["size"]:
+              raise SystemExit("MSI digest/size mismatch")
+          (root / f'{expected["msi_file"]}.sha256').write_text(
+              f'{digest}  {expected["msi_file"]}\n', encoding="ascii")
+          print("Validated exact Build 1014 MSI", digest, len(data))
+          PY
+
+      - name: Publish immutable Managed release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="managed-1.5.0-r1"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; refusing to replace it."
+            exit 1
+          fi
+          gh release create "$TAG" \
+            "release-input/rustdesk-managed-1.5.0-r1-x86_64.msi" \
+            "release-input/rustdesk-managed-1.5.0-r1-x86_64.msi.sha256" \
+            "release-input/managed-build.json" \
+            --repo "${{ github.repository }}" \
+            --target "f9b9502dcc3bf59adfe7c4f7f6abb32cb9f20920" \
+            --title "RustDesk Managed 1.5.0-r1" \
+            --notes "Managed build 1014, based on RustDesk 1.5.0. Includes mutual Cat LAN discovery, Direct IP access on TCP 21118, Managed credential overrides, dashboard/diagnostics, and the Cat updater. SHA-256: 84700b552d85fc5b488d52136a417baab6abe6b1f35663b8681faa6f8a5e8aa1"
