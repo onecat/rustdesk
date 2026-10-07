@@ -30,7 +30,7 @@ env:
   VCPKG_ROOT: "C:\\vcpkg"
   VERSION: "1.5.0"
   MANAGED_VERSION: "1.5.0-r1"
-  MANAGED_BUILD: "1013"
+  MANAGED_BUILD: "1014"
   MSI_REVISION_BASE: "30000000"
   # Public, stable salt for Managed permanent-password hashing. Keep unchanged
   # across future Managed releases so remembered peer credentials remain valid.

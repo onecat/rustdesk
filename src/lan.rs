@@ -22,6 +22,7 @@ use std::{
 };
 
 type Message = RendezvousMessage;
+const CAT_LAN_MISC_PREFIX: &str = "cat-lan-v1:";
 
 #[cfg(not(target_os = "ios"))]
 pub(super) fn start_listening() -> ResultType<()> {
@@ -52,6 +53,10 @@ pub(super) fn start_listening() -> ResultType<()> {
                                 if hostname == "localhost" {
                                     hostname = "unknown".to_owned();
                                 }
+                                let misc = match self_addr {
+                                    IpAddr::V4(ip) => format!("{CAT_LAN_MISC_PREFIX}{ip}"),
+                                    IpAddr::V6(_) => String::new(),
+                                };
                                 let peer = PeerDiscovery {
                                     cmd: "pong".to_owned(),
                                     mac: get_mac(&self_addr),
@@ -59,6 +64,7 @@ pub(super) fn start_listening() -> ResultType<()> {
                                     hostname,
                                     username: crate::platform::get_active_username(),
                                     platform: whoami::platform().to_string(),
+                                    misc,
                                     ..Default::default()
                                 };
                                 msg_out.set_peer_discovery(peer);
@@ -75,6 +81,7 @@ pub(super) fn start_listening() -> ResultType<()> {
 
 #[tokio::main(flavor = "current_thread")]
 pub async fn discover() -> ResultType<()> {
+    crate::managed_config::clear_managed_lan_routes();
     let sockets = send_query()?;
     let rx = spawn_wait_responses(sockets);
     handle_received_peers(rx).await?;
@@ -271,11 +278,27 @@ fn wait_response(
                             };
 
                             if local_mac.is_empty() && p.mac.is_empty() || local_mac != p.mac {
+                                let source_ip = addr.ip().to_string();
+                                let reported_ip = p
+                                    .misc
+                                    .strip_prefix(CAT_LAN_MISC_PREFIX)
+                                    .and_then(|value| value.parse::<Ipv4Addr>().ok())
+                                    .filter(|ip| {
+                                        !ip.is_loopback()
+                                            && !ip.is_unspecified()
+                                            && !ip.is_multicast()
+                                    })
+                                    .map(|ip| ip.to_string());
+                                crate::managed_config::record_managed_lan_route(
+                                    &p.id,
+                                    reported_ip.as_deref(),
+                                    &source_ip,
+                                );
+                                let peer_ip =
+                                    reported_ip.unwrap_or_else(|| source_ip.clone());
                                 allow_err!(tx.send(config::DiscoveryPeer {
                                     id: p.id.clone(),
-                                    ip_mac: HashMap::from([
-                                        (addr.ip().to_string(), p.mac.clone(),)
-                                    ]),
+                                    ip_mac: HashMap::from([(peer_ip, p.mac.clone())]),
                                     username: p.username.clone(),
                                     hostname: p.hostname.clone(),
                                     platform: p.platform.clone(),

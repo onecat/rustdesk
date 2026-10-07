@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
@@ -20,6 +21,8 @@ class _ManagedLanPeer {
   final String platform;
   final bool online;
   final String preferredIp;
+  final List<String> reportedIps;
+  final List<String> sourceIps;
   final Map<String, String> ipMac;
   final DateTime? lastSeen;
 
@@ -30,6 +33,8 @@ class _ManagedLanPeer {
     required this.platform,
     required this.online,
     required this.preferredIp,
+    required this.reportedIps,
+    required this.sourceIps,
     required this.ipMac,
     required this.lastSeen,
   });
@@ -127,6 +132,15 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
           }
         }
 
+        List<String> stringList(dynamic value) {
+          if (value is! List) return const [];
+          return value
+              .map((e) => e.toString())
+              .where((e) => e.isNotEmpty)
+              .toSet()
+              .toList();
+        }
+
         final online = trustOnline && item['online'] == true;
         if (online) _lastSeen[id] = now;
         peers.add(_ManagedLanPeer(
@@ -136,6 +150,8 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
           platform: item['platform']?.toString() ?? '',
           online: online,
           preferredIp: item['preferred_ip']?.toString() ?? '',
+          reportedIps: stringList(item['reported_ips']),
+          sourceIps: stringList(item['source_ips']),
           ipMac: ipMac,
           lastSeen: online ? now : _lastSeen[id],
         ));
@@ -153,7 +169,7 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
       setState(() => _peers = peers);
       await _saveLastSeen();
     } catch (e) {
-      debugPrint('Failed to load R11 LAN peers: $e');
+      debugPrint('Failed to load Managed LAN peers: $e');
     }
   }
 
@@ -205,21 +221,62 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
       peer.hostname,
       peer.username,
       peer.platform,
+      ...peer.reportedIps,
+      ...peer.sourceIps,
       ...peer.ipMac.keys,
       ...peer.ipMac.values,
     ].join(' ').toLowerCase();
     return haystack.contains(q);
   }
 
-  String _directIp(_ManagedLanPeer peer) {
-    if (peer.preferredIp.isNotEmpty) return peer.preferredIp;
-    final ips = peer.ipMac.keys.toList()..sort();
-    return ips.isEmpty ? '' : ips.first;
+  List<String> _directCandidates(_ManagedLanPeer peer) {
+    final candidates = <String>[];
+
+    void add(String value) {
+      if (value.isNotEmpty && !candidates.contains(value)) {
+        candidates.add(value);
+      }
+    }
+
+    add(peer.preferredIp);
+    for (final ip in peer.reportedIps) {
+      add(ip);
+    }
+
+    // A Cat peer with a self-reported interface IP should never fall back to
+    // a different UDP source address, which may be a NAT/side-router address.
+    // For ordinary RustDesk peers that do not speak cat-lan-v1, the original
+    // source-derived ip_mac values remain the compatibility fallback.
+    if (peer.reportedIps.isEmpty) {
+      final ips = peer.ipMac.keys.toList()..sort();
+      for (final ip in ips) {
+        add(ip);
+      }
+      for (final ip in peer.sourceIps) {
+        add(ip);
+      }
+    }
+    return candidates;
   }
 
-  String _directTarget(_ManagedLanPeer peer) {
-    final ip = _directIp(peer);
-    return ip.isEmpty ? '' : '$ip:21118';
+  String _directTargetPreview(_ManagedLanPeer peer) {
+    final candidates = _directCandidates(peer);
+    return candidates.isEmpty ? '' : '${candidates.first}:21118';
+  }
+
+  Future<String> _probeDirectTarget(_ManagedLanPeer peer) async {
+    for (final ip in _directCandidates(peer)) {
+      try {
+        final socket = await Socket.connect(
+          ip,
+          21118,
+          timeout: const Duration(milliseconds: 900),
+        );
+        socket.destroy();
+        return '$ip:21118';
+      } catch (_) {}
+    }
+    return '';
   }
 
   Future<void> _openPeer(
@@ -227,13 +284,14 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
     bool fileTransfer = false,
     bool terminal = false,
   }) async {
-    final target = _directTarget(peer);
+    final target = await _probeDirectTarget(peer);
+    if (!mounted) return;
     if (target.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('该设备没有可用的局域网 IP 地址')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('已发现设备，但 TCP 21118 局域网直连不可达'),
+        ),
+      );
       return;
     }
     await connect(
@@ -251,8 +309,14 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
     }
     final macs = peer.ipMac.values.where((e) => e.isNotEmpty).toSet().toList()
       ..sort();
-    final directTarget = _directTarget(peer);
+    final directTarget = _directTargetPreview(peer);
     final canDirect = directTarget.isNotEmpty;
+    final deviceIps = peer.reportedIps.isNotEmpty
+        ? peer.reportedIps
+        : ips;
+    final sourceOnly = peer.sourceIps
+        .where((ip) => !deviceIps.contains(ip))
+        .toList();
 
     return Card(
       elevation: 0,
@@ -301,7 +365,12 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
                 runSpacing: 6,
                 children: [
                   _detail('用户', peer.username.isEmpty ? '--' : peer.username),
-                  _detail('IP', ips.isEmpty ? '--' : ips.join(', ')),
+                  _detail(
+                    peer.reportedIps.isNotEmpty ? '设备 IP' : 'IP',
+                    deviceIps.isEmpty ? '--' : deviceIps.join(', '),
+                  ),
+                  if (sourceOnly.isNotEmpty)
+                    _detail('发现来源', sourceOnly.join(', ')),
                   _detail('MAC', macs.isEmpty ? '--' : macs.join(', ')),
                   _detail('系统', peer.platform.isEmpty ? '--' : peer.platform),
                   _detail('最后发现', _formatLastSeen(peer.lastSeen)),

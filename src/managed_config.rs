@@ -4,10 +4,10 @@ use hbb_common::{
     lazy_static,
     sysinfo::{Disks, System},
 };
-use std::{net::Ipv4Addr, sync::Mutex};
+use std::{collections::HashMap, net::Ipv4Addr, sync::Mutex};
 
 pub(crate) const MANAGED_VERSION: &str = "1.5.0-r1";
-pub(crate) const MANAGED_BUILD: u64 = 1013;
+pub(crate) const MANAGED_BUILD: u64 = 1014;
 pub(crate) const MANAGED_UPDATE_MANIFEST_BASE: &str =
     "https://github.com/onecat/rustdesk/releases/download/managed-update";
 pub(crate) const MANAGED_GITHUB_FALLBACK_PREFIX: &str = "https://gh.catmak.name/";
@@ -33,6 +33,14 @@ lazy_static::lazy_static! {
     /// the dashboard does not repeatedly rebuild expensive system state.
     static ref MANAGED_SYSTEM_INFO: Mutex<System> = Mutex::new(System::new());
     static ref MANAGED_DISKS: Mutex<Disks> = Mutex::new(Disks::new());
+    static ref MANAGED_LAN_ROUTES: Mutex<HashMap<String, ManagedLanRoute>> =
+        Mutex::new(HashMap::new());
+}
+
+#[derive(Clone, Default)]
+struct ManagedLanRoute {
+    reported_ips: Vec<String>,
+    source_ips: Vec<String>,
 }
 
 /// Lightweight system snapshot for the Cat dashboard.
@@ -93,6 +101,53 @@ pub(crate) fn managed_system_info_json(refresh_disk: bool) -> String {
     .to_string()
 }
 
+fn valid_managed_lan_ipv4(value: &str) -> Option<String> {
+    let ip = value.parse::<Ipv4Addr>().ok()?;
+    if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
+        return None;
+    }
+    Some(ip.to_string())
+}
+
+/// Route metadata observed during the current discovery pass. The RustDesk
+/// protobuf has no dedicated IP field, so Cat clients advertise their selected
+/// local interface IPv4 in PeerDiscovery.misc while the UDP source is retained
+/// separately for diagnostics.
+pub(crate) fn clear_managed_lan_routes() {
+    if let Ok(mut routes) = MANAGED_LAN_ROUTES.lock() {
+        routes.clear();
+    }
+}
+
+pub(crate) fn record_managed_lan_route(
+    peer_id: &str,
+    reported_ip: Option<&str>,
+    source_ip: &str,
+) {
+    if peer_id.is_empty() {
+        return;
+    }
+    let source_ip = valid_managed_lan_ipv4(source_ip);
+    let reported_ip = reported_ip.and_then(valid_managed_lan_ipv4);
+    if source_ip.is_none() && reported_ip.is_none() {
+        return;
+    }
+
+    if let Ok(mut routes) = MANAGED_LAN_ROUTES.lock() {
+        let route = routes.entry(peer_id.to_owned()).or_default();
+        if let Some(ip) = reported_ip {
+            if !route.reported_ips.contains(&ip) {
+                route.reported_ips.push(ip);
+            }
+        }
+        if let Some(ip) = source_ip {
+            if !route.source_ips.contains(&ip) {
+                route.source_ips.push(ip);
+            }
+        }
+    }
+}
+
 /// Pick the most useful IPv4 address for direct LAN access.
 /// Prefer an address sharing the longest local subnet prefix; fall back to a
 /// private/link-local address when no local subnet matches.
@@ -147,11 +202,26 @@ fn preferred_lan_ipv4(ip_mac: &std::collections::HashMap<String, String>) -> Str
 /// discovery code already marks cached peers offline before each scan and
 /// merges multiple IP/MAC pairs for the same peer.
 pub(crate) fn managed_lan_peers_json() -> String {
+    let routes = MANAGED_LAN_ROUTES
+        .lock()
+        .map(|routes| routes.clone())
+        .unwrap_or_default();
     let peers: Vec<serde_json::Value> = config::LanPeers::load()
         .peers
         .into_iter()
         .map(|peer| {
-            let preferred_ip = preferred_lan_ipv4(&peer.ip_mac);
+            let route = routes.get(&peer.id).cloned().unwrap_or_default();
+            let preferred_ip = if route.reported_ips.is_empty() {
+                preferred_lan_ipv4(&peer.ip_mac)
+            } else {
+                let reported: HashMap<String, String> = route
+                    .reported_ips
+                    .iter()
+                    .cloned()
+                    .map(|ip| (ip, String::new()))
+                    .collect();
+                preferred_lan_ipv4(&reported)
+            };
             serde_json::json!({
                 "id": peer.id,
                 "hostname": peer.hostname,
@@ -159,6 +229,8 @@ pub(crate) fn managed_lan_peers_json() -> String {
                 "platform": peer.platform,
                 "online": peer.online,
                 "preferred_ip": preferred_ip,
+                "reported_ips": route.reported_ips,
+                "source_ips": route.source_ips,
                 "ip_mac": peer.ip_mac,
             })
         })
