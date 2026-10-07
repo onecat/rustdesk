@@ -19,6 +19,7 @@ class _ManagedLanPeer {
   final String username;
   final String platform;
   final bool online;
+  final String preferredIp;
   final Map<String, String> ipMac;
   final DateTime? lastSeen;
 
@@ -28,6 +29,7 @@ class _ManagedLanPeer {
     required this.username,
     required this.platform,
     required this.online,
+    required this.preferredIp,
     required this.ipMac,
     required this.lastSeen,
   });
@@ -133,6 +135,7 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
           username: item['username']?.toString() ?? '',
           platform: item['platform']?.toString() ?? '',
           online: online,
+          preferredIp: item['preferred_ip']?.toString() ?? '',
           ipMac: ipMac,
           lastSeen: online ? now : _lastSeen[id],
         ));
@@ -208,14 +211,34 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
     return haystack.contains(q);
   }
 
+  String _directIp(_ManagedLanPeer peer) {
+    if (peer.preferredIp.isNotEmpty) return peer.preferredIp;
+    final ips = peer.ipMac.keys.toList()..sort();
+    return ips.isEmpty ? '' : ips.first;
+  }
+
+  String _directTarget(_ManagedLanPeer peer) {
+    final ip = _directIp(peer);
+    return ip.isEmpty ? '' : '$ip:21118';
+  }
+
   Future<void> _openPeer(
     _ManagedLanPeer peer, {
     bool fileTransfer = false,
     bool terminal = false,
   }) async {
+    final target = _directTarget(peer);
+    if (target.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('该设备没有可用的局域网 IP 地址')),
+        );
+      }
+      return;
+    }
     await connect(
       context,
-      peer.id,
+      target,
       isFileTransfer: fileTransfer,
       isTerminal: terminal,
     );
@@ -223,8 +246,13 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
 
   Widget _peerCard(_ManagedLanPeer peer) {
     final ips = peer.ipMac.keys.toList()..sort();
+    if (peer.preferredIp.isNotEmpty && ips.remove(peer.preferredIp)) {
+      ips.insert(0, peer.preferredIp);
+    }
     final macs = peer.ipMac.values.where((e) => e.isNotEmpty).toSet().toList()
       ..sort();
+    final directTarget = _directTarget(peer);
+    final canDirect = directTarget.isNotEmpty;
 
     return Card(
       elevation: 0,
@@ -285,18 +313,22 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
               spacing: 4,
               children: [
                 IconButton(
-                  tooltip: '连接',
-                  onPressed: () => _openPeer(peer),
+                  tooltip: canDirect ? '局域网直连 $directTarget' : '没有可用的局域网 IP',
+                  onPressed: canDirect ? () => _openPeer(peer) : null,
                   icon: const Icon(Icons.desktop_windows_rounded),
                 ),
                 IconButton(
-                  tooltip: '文件',
-                  onPressed: () => _openPeer(peer, fileTransfer: true),
+                  tooltip: canDirect ? '文件传输 $directTarget' : '没有可用的局域网 IP',
+                  onPressed: canDirect
+                      ? () => _openPeer(peer, fileTransfer: true)
+                      : null,
                   icon: const Icon(Icons.folder_copy_outlined),
                 ),
                 IconButton(
-                  tooltip: '终端',
-                  onPressed: () => _openPeer(peer, terminal: true),
+                  tooltip: canDirect ? '终端 $directTarget' : '没有可用的局域网 IP',
+                  onPressed: canDirect
+                      ? () => _openPeer(peer, terminal: true)
+                      : null,
                   icon: const Icon(Icons.terminal_rounded),
                 ),
                 IconButton(
@@ -400,9 +432,11 @@ class _ManagedLanPageState extends State<ManagedLanPage> {
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const Spacer(),
-              const Icon(Icons.visibility_off_outlined, size: 16),
+              const Icon(Icons.radar_rounded, size: 16),
               const SizedBox(width: 5),
-              const Text('单向发现：本机不响应其他设备扫描'),
+              const Text('局域网发现：已启用 · 设备可互相发现'),
+              const SizedBox(width: 12),
+              const Text('连接：IP 直连 21118'),
               const SizedBox(width: 12),
               const Text('自动刷新：60 秒'),
             ],
