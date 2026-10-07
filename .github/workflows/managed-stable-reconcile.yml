@@ -161,4 +161,4 @@ jobs:
               --notes "Stable update manifest automatically tracks the highest published Managed build."
           fi
 
-# last-reconcile-trigger: r7
+# last-reconcile-trigger: managed-1.5.0-r1
