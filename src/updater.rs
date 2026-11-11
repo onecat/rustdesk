@@ -850,7 +850,7 @@ fn install_managed_package(payload: &ManagedManifestPayload, package_path: &Path
     );
     write_managed_state(Some(payload), true, None, "installing");
 
-    match crate::platform::update_me_msi(path, true) {
+    match crate::platform::update_me_msi(path, &payload.package.sha256, true) {
         Ok(_) => {
             log::info!(
                 "RustDesk Managed {} build {} installation launched successfully.",
