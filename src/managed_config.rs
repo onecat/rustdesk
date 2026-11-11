@@ -1,0 +1,600 @@
+use base::config::keys;
+use hbb_common::{
+    config::{self, Config},
+    lazy_static,
+    sysinfo::{Disks, System},
+};
+use std::{collections::HashMap, net::Ipv4Addr, sync::Mutex};
+
+pub(crate) const MANAGED_VERSION: &str = "1.5.1-r1";
+pub(crate) const MANAGED_BUILD: u64 = 1015;
+pub(crate) const MANAGED_UPDATE_MANIFEST_BASE: &str =
+    "https://github.com/onecat/rustdesk/releases/download/managed-update";
+pub(crate) const MANAGED_GITHUB_FALLBACK_PREFIX: &str = "https://gh.catmak.name/";
+
+pub(crate) fn managed_updates_enabled() -> bool {
+    cfg!(target_os = "windows")
+}
+
+pub(crate) fn managed_update_channel() -> String {
+    "stable".to_owned()
+}
+
+pub(crate) fn managed_update_manifest_url() -> String {
+    format!(
+        "{}/{}.json",
+        MANAGED_UPDATE_MANIFEST_BASE,
+        managed_update_channel()
+    )
+}
+
+lazy_static::lazy_static! {
+    /// Reuse one sysinfo instance so CPU utilization has a previous sample and
+    /// the dashboard does not repeatedly rebuild expensive system state.
+    static ref MANAGED_SYSTEM_INFO: Mutex<System> = Mutex::new(System::new());
+    static ref MANAGED_DISKS: Mutex<Disks> = Mutex::new(Disks::new());
+    static ref MANAGED_LAN_ROUTES: Mutex<HashMap<String, ManagedLanRoute>> =
+        Mutex::new(HashMap::new());
+}
+
+#[derive(Clone, Default)]
+struct ManagedLanRoute {
+    reported_ips: Vec<String>,
+    source_ips: Vec<String>,
+}
+
+/// Lightweight system snapshot for the Cat dashboard.
+///
+/// Memory values follow the sysinfo 0.29 representation and are passed through
+/// unchanged; the Flutter side formats them defensively. Disk enumeration is
+/// intentionally optional so the common 10-second refresh does not rescan
+/// volumes. The UI requests disk data only on first display and every 60 seconds.
+pub(crate) fn managed_system_info_json(refresh_disk: bool) -> String {
+    let mut sys = match MANAGED_SYSTEM_INFO.lock() {
+        Ok(sys) => sys,
+        Err(_) => return "{}".to_owned(),
+    };
+
+    sys.refresh_cpu();
+    sys.refresh_memory();
+
+    let cpu_usage = sys.global_cpu_info().cpu_usage();
+    let cpu_brand = sys
+        .cpus()
+        .first()
+        .map(|cpu| cpu.brand().trim().to_owned())
+        .unwrap_or_default();
+
+    let system_drive = std::env::var("SystemDrive")
+        .unwrap_or_else(|_| "C:".to_owned())
+        .to_lowercase();
+    let (disk_total, disk_available) = match MANAGED_DISKS.lock() {
+        Ok(mut disks) => {
+            if refresh_disk {
+                disks.refresh_list();
+                disks.refresh();
+            }
+            disks
+                .list()
+                .iter()
+                .find(|disk| {
+                    disk.mount_point()
+                        .to_string_lossy()
+                        .to_lowercase()
+                        .starts_with(&system_drive)
+                })
+                .map(|disk| (disk.total_space(), disk.available_space()))
+                .unwrap_or((0, 0))
+        }
+        Err(_) => (0, 0),
+    };
+
+    serde_json::json!({
+        "cpu_usage": cpu_usage,
+        "cpu_brand": cpu_brand,
+        "memory_total": sys.total_memory(),
+        "memory_used": sys.used_memory(),
+        "uptime": sys.uptime(),
+        "disk_total": disk_total,
+        "disk_available": disk_available,
+    })
+    .to_string()
+}
+
+fn valid_managed_lan_ipv4(value: &str) -> Option<String> {
+    let ip = value.parse::<Ipv4Addr>().ok()?;
+    if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
+        return None;
+    }
+    Some(ip.to_string())
+}
+
+/// Route metadata observed during the current discovery pass. The RustDesk
+/// protobuf has no dedicated IP field, so Cat clients advertise their selected
+/// local interface IPv4 in PeerDiscovery.misc while the UDP source is retained
+/// separately for diagnostics.
+pub(crate) fn clear_managed_lan_routes() {
+    if let Ok(mut routes) = MANAGED_LAN_ROUTES.lock() {
+        routes.clear();
+    }
+}
+
+pub(crate) fn record_managed_lan_route(
+    peer_id: &str,
+    reported_ip: Option<&str>,
+    source_ip: &str,
+) {
+    if peer_id.is_empty() {
+        return;
+    }
+    let source_ip = valid_managed_lan_ipv4(source_ip);
+    let reported_ip = reported_ip.and_then(valid_managed_lan_ipv4);
+    if source_ip.is_none() && reported_ip.is_none() {
+        return;
+    }
+
+    if let Ok(mut routes) = MANAGED_LAN_ROUTES.lock() {
+        let route = routes.entry(peer_id.to_owned()).or_default();
+        if let Some(ip) = reported_ip {
+            if !route.reported_ips.contains(&ip) {
+                route.reported_ips.push(ip);
+            }
+        }
+        if let Some(ip) = source_ip {
+            if !route.source_ips.contains(&ip) {
+                route.source_ips.push(ip);
+            }
+        }
+    }
+}
+
+/// Pick the most useful IPv4 address for direct LAN access.
+/// Prefer an address sharing the longest local subnet prefix; fall back to a
+/// private/link-local address when no local subnet matches.
+fn preferred_lan_ipv4(ip_mac: &std::collections::HashMap<String, String>) -> String {
+    let interfaces = default_net::get_interfaces();
+    let mut candidates: Vec<Ipv4Addr> = ip_mac
+        .keys()
+        .filter_map(|ip| ip.parse::<Ipv4Addr>().ok())
+        .filter(|ip| !ip.is_loopback() && !ip.is_unspecified() && !ip.is_multicast())
+        .collect();
+    candidates.sort_by_key(|ip| u32::from(*ip));
+    candidates.dedup();
+
+    let mut best: Option<(u32, u32, Ipv4Addr)> = None;
+    for candidate in candidates {
+        let candidate_num = u32::from(candidate);
+        let mut score = if candidate.is_private() {
+            100
+        } else if candidate.is_link_local() {
+            20
+        } else {
+            10
+        };
+
+        for interface in &interfaces {
+            for local in &interface.ipv4 {
+                if local.addr.is_loopback() || local.addr.is_unspecified() {
+                    continue;
+                }
+                let mask = u32::from(local.netmask);
+                if mask != 0 && (candidate_num & mask) == (u32::from(local.addr) & mask) {
+                    score = score.max(1000 + mask.count_ones());
+                }
+            }
+        }
+
+        match best {
+            None => best = Some((score, candidate_num, candidate)),
+            Some((best_score, best_num, _))
+                if score > best_score || (score == best_score && candidate_num < best_num) =>
+            {
+                best = Some((score, candidate_num, candidate));
+            }
+            _ => {}
+        }
+    }
+
+    best.map(|(_, _, ip)| ip.to_string()).unwrap_or_default()
+}
+
+/// Rich LAN peer cache for the Cat Managed LAN page. RustDesk's native
+/// discovery code already marks cached peers offline before each scan and
+/// merges multiple IP/MAC pairs for the same peer.
+pub(crate) fn managed_lan_peers_json() -> String {
+    let routes = MANAGED_LAN_ROUTES
+        .lock()
+        .map(|routes| routes.clone())
+        .unwrap_or_default();
+    let peers: Vec<serde_json::Value> = config::LanPeers::load()
+        .peers
+        .into_iter()
+        .map(|peer| {
+            let route = routes.get(&peer.id).cloned().unwrap_or_default();
+            let preferred_ip = if route.reported_ips.is_empty() {
+                preferred_lan_ipv4(&peer.ip_mac)
+            } else {
+                let reported: HashMap<String, String> = route
+                    .reported_ips
+                    .iter()
+                    .cloned()
+                    .map(|ip| (ip, String::new()))
+                    .collect();
+                preferred_lan_ipv4(&reported)
+            };
+            serde_json::json!({
+                "id": peer.id,
+                "hostname": peer.hostname,
+                "username": peer.username,
+                "platform": peer.platform,
+                "online": peer.online,
+                "preferred_ip": preferred_ip,
+                "reported_ips": route.reported_ips,
+                "source_ips": route.source_ips,
+                "ip_mac": peer.ip_mac,
+            })
+        })
+        .collect();
+    serde_json::to_string(&peers).unwrap_or_else(|_| "[]".to_owned())
+}
+
+/// Expose the enforced Managed endpoints read-only to the Managed diagnostics UI.
+pub(crate) fn managed_server_config_json() -> String {
+    serde_json::json!({
+        "rendezvous": "rustdesk-server.catmak.name",
+        "rendezvous_port": 21116,
+        "relay": "rustdesk-relay.catmak.name",
+        "relay_port": 21117,
+        "api": "rustdesk-api.catmak.name",
+        "api_port": 443,
+        "direct_port": 21118,
+        "lan_discovery_reply": true,
+    })
+    .to_string()
+}
+
+
+
+/// This build intentionally locks its private-server policy.
+pub(crate) fn server_settings_locked() -> bool {
+    true
+}
+
+/// Version checks against the public RustDesk update service are disabled.
+pub(crate) fn version_check_disabled() -> bool {
+    true
+}
+
+/// Cat Managed keeps the incoming-session permission window hidden on Windows.
+/// Session visibility is retained through the tray tooltip/session count.
+pub(crate) fn connection_manager_hidden() -> bool {
+    cfg!(target_os = "windows")
+}
+
+/// Detect the Windows secure/locked desktop without treating ordinary focus
+/// changes or minimization as a lock event. A secure desktop also covers UAC
+/// secure prompts, where relocking the local management UI is conservative.
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_session_locked() -> bool {
+    use winapi::um::winuser::{
+        CloseDesktop, OpenInputDesktop, SwitchDesktop, DESKTOP_SWITCHDESKTOP,
+    };
+
+    unsafe {
+        let desktop = OpenInputDesktop(0, 0, DESKTOP_SWITCHDESKTOP);
+        if desktop.is_null() {
+            return true;
+        }
+        let unlocked = SwitchDesktop(desktop) != 0;
+        CloseDesktop(desktop);
+        !unlocked
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn windows_session_locked() -> bool {
+    false
+}
+
+/// Read password-derived material injected only into the final Windows build.
+///
+/// The public repository never contains the plaintext permanent password.
+/// GitHub Actions derives the authentication hash from the password secret and
+/// the public, stable Managed salt, then injects both at compile time.
+#[cfg(target_os = "windows")]
+fn installed_password_material(hash_name: &str, salt_name: &str) -> Option<(String, String)> {
+    use winreg::{
+        enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY},
+        RegKey,
+    };
+
+    let root = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let key = root
+        .open_subkey_with_flags(
+            r"SOFTWARE\RustDesk\Managed",
+            KEY_READ | KEY_WOW64_64KEY,
+        )
+        .ok()?;
+    let storage: String = key.get_value(hash_name).ok()?;
+    let salt: String = key.get_value(salt_name).ok()?;
+    if storage.starts_with("00") && storage.len() > 2 && !salt.is_empty() {
+        Some((storage, salt))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn installed_password_material(_hash_name: &str, _salt_name: &str) -> Option<(String, String)> {
+    None
+}
+
+fn preset_password_material() -> Option<(String, String)> {
+    if let Some(material) =
+        installed_password_material("RemotePasswordStorage", "RemotePasswordSalt")
+    {
+        return Some(material);
+    }
+
+    let storage = option_env!("RUSTDESK_FIXED_PASSWORD_HASH").unwrap_or("");
+    let salt = option_env!("RUSTDESK_FIXED_PASSWORD_SALT").unwrap_or("");
+    if storage.starts_with("00") && storage.len() > 2 && !salt.is_empty() {
+        Some((storage.to_owned(), salt.to_owned()))
+    } else {
+        None
+    }
+}
+
+/// Verify the managed settings/uninstall password against the same
+/// build-time material used by RustDesk permanent-password authentication.
+/// No plaintext password is embedded in the public source or final binary.
+pub(crate) fn verify_fixed_password(input: &str) -> bool {
+    if input.is_empty() {
+        return false;
+    }
+    let Some((storage, salt)) = preset_password_material() else {
+        return false;
+    };
+    let Some(expected) = config::decode_preset_password_h1_from_storage(&storage) else {
+        return false;
+    };
+    let actual = config::compute_permanent_password_h1(input, &salt);
+
+    // Constant-time comparison for the fixed-size SHA-256 value.
+    let mut diff = 0u8;
+    for i in 0..actual.len() {
+        diff |= actual[i] ^ expected[i];
+    }
+    diff == 0
+}
+
+/// Read the dedicated Cat dashboard administrator credential injected at build time.
+///
+/// Managed builds support a separate RUSTDESK_ADMIN_PASSWORD repository secret. The CI
+/// pipeline may temporarily fall back to the remote-access secret if the new
+/// secret has not been configured yet, allowing a non-breaking migration.
+fn preset_admin_password_material() -> Option<(String, String)> {
+    if let Some(material) =
+        installed_password_material("AdminPasswordStorage", "AdminPasswordSalt")
+    {
+        return Some(material);
+    }
+
+    let storage = option_env!("RUSTDESK_ADMIN_PASSWORD_HASH").unwrap_or("");
+    let salt = option_env!("RUSTDESK_ADMIN_PASSWORD_SALT").unwrap_or("");
+    if storage.starts_with("00") && storage.len() > 2 && !salt.is_empty() {
+        Some((storage.to_owned(), salt.to_owned()))
+    } else {
+        None
+    }
+}
+
+/// Validate the local Cat management-mode password without exposing plaintext.
+pub(crate) fn verify_admin_password(input: &str) -> bool {
+    if input.is_empty() {
+        return false;
+    }
+    let Some((storage, salt)) = preset_admin_password_material() else {
+        return false;
+    };
+    let Some(expected) = config::decode_preset_password_h1_from_storage(&storage) else {
+        return false;
+    };
+    let actual = config::compute_permanent_password_h1(input, &salt);
+
+    let mut diff = 0u8;
+    for i in 0..actual.len() {
+        diff |= actual[i] ^ expected[i];
+    }
+    diff == 0
+}
+
+/// Apply managed's enforced client policy after any external/custom configuration.
+pub(crate) fn apply() {
+    let has_preset_password = if let Some((storage, salt)) = preset_password_material() {
+        {
+            let mut hard = config::HARD_SETTINGS.write().unwrap();
+            hard.insert("password".to_owned(), storage);
+            hard.insert("salt".to_owned(), salt);
+        }
+
+        // Remove an old locally persisted password so the injected preset password
+        // remains authoritative when upgrading an existing RustDesk installation.
+        if !Config::is_disable_change_permanent_password() {
+            let _ = Config::set_permanent_password("");
+        }
+        true
+    } else {
+        false
+    };
+
+    {
+        // Hide account-related pages/features in this managed client.
+        config::HARD_SETTINGS
+            .write()
+            .unwrap()
+            .insert("disable-account".to_owned(), "Y".to_owned());
+    }
+
+    {
+        let mut settings = config::OVERWRITE_SETTINGS.write().unwrap();
+        for (key, value) in [
+            (
+                keys::OPTION_CUSTOM_RENDEZVOUS_SERVER,
+                "rustdesk-server.catmak.name",
+            ),
+            (keys::OPTION_RELAY_SERVER, "rustdesk-relay.catmak.name"),
+            (
+                keys::OPTION_API_SERVER,
+                "https://rustdesk-api.catmak.name",
+            ),
+            (
+                keys::OPTION_KEY,
+                "LmNVkrH1xApjMUUdBggKBz9NCieG+jBS8te9pmrdZcQ=",
+            ),
+            (keys::OPTION_ALLOW_AUTO_UPDATE, "N"),
+            (keys::OPTION_ENABLE_LAN_DISCOVERY, "Y"),
+            (keys::OPTION_DIRECT_SERVER, "Y"),
+            (keys::OPTION_DIRECT_ACCESS_PORT, "21118"),
+            (keys::OPTION_ALLOW_REMOTE_CONFIG_MODIFICATION, "Y"),
+            ("stop-service", "N"),
+        ] {
+            settings.insert(key.to_owned(), value.to_owned());
+        }
+        if has_preset_password {
+            settings.insert(keys::OPTION_APPROVE_MODE.to_owned(), "password".to_owned());
+            settings.insert(
+                keys::OPTION_VERIFICATION_METHOD.to_owned(),
+                "use-permanent-password".to_owned(),
+            );
+        }
+    }
+
+    {
+        let mut local = config::OVERWRITE_LOCAL_SETTINGS.write().unwrap();
+        local.insert(keys::OPTION_ENABLE_CHECK_UPDATE.to_owned(), "N".to_owned());
+    }
+
+    // These are user-overridable defaults, not enforced settings.
+    // Explicit per-user display choices continue to take precedence.
+    {
+        let mut defaults = config::DEFAULT_DISPLAY_SETTINGS.write().unwrap();
+        defaults.insert(keys::OPTION_VIEW_STYLE.to_owned(), "adaptive".to_owned());
+        defaults.insert(keys::OPTION_SCROLL_STYLE.to_owned(), "scrollbar".to_owned());
+    }
+
+    {
+        let mut builtin = config::BUILTIN_SETTINGS.write().unwrap();
+        for (key, value) in [
+            (keys::OPTION_HIDE_SERVER_SETTINGS, "Y"),
+            (keys::OPTION_HIDE_HELP_CARDS, "Y"),
+            (keys::OPTION_HIDE_STOP_SERVICE, "Y"),
+            (keys::OPTION_HIDE_REMOTE_PRINTER_SETTINGS, "Y"),
+            (keys::OPTION_ALLOW_DEEP_LINK_SERVER_SETTINGS, "N"),
+        ] {
+            builtin.insert(key.to_owned(), value.to_owned());
+        }
+        if has_preset_password {
+            builtin.insert(
+                keys::OPTION_REMOVE_PRESET_PASSWORD_WARNING.to_owned(),
+                "Y".to_owned(),
+            );
+            builtin.insert(
+                keys::OPTION_DISABLE_CHANGE_PERMANENT_PASSWORD.to_owned(),
+                "Y".to_owned(),
+            );
+        }
+    }
+}
+
+
+// Windows 11 still reports NT 10.0, and registry ProductName can keep the
+// Windows 10 branding after an upgrade. Use the actual OS build to distinguish
+// Windows 10 from Windows 11 without misclassifying Windows Server.
+#[cfg(any(test, target_os = "windows"))]
+fn format_managed_windows_version(
+    product_name: &str,
+    build_number: &str,
+    display_version: &str,
+    ubr: u32,
+) -> String {
+    let name = product_name.trim();
+    if name.is_empty() {
+        return String::new();
+    }
+    let build_number = build_number.trim();
+    let build = build_number.parse::<u32>().unwrap_or(0);
+    let name = if build >= 22000 && name.starts_with("Windows 10") {
+        name.replacen("Windows 10", "Windows 11", 1)
+    } else {
+        name.to_owned()
+    };
+    let version = display_version.trim();
+    let mut parts = vec![name];
+    if !version.is_empty() {
+        parts.push(version.to_owned());
+    }
+    if build > 0 {
+        let build_text = if ubr > 0 {
+            format!("Build {}.{}", build_number, ubr)
+        } else {
+            format!("Build {}", build_number)
+        };
+        parts.push(format!("({})", build_text));
+    }
+    parts.join(" ")
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn managed_windows_version() -> String {
+    use winreg::{
+        enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY},
+        RegKey,
+    };
+
+    let root = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let Ok(key) = root.open_subkey_with_flags(
+        r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+        KEY_READ | KEY_WOW64_64KEY,
+    ) else {
+        return String::new();
+    };
+    let product: String = key.get_value("ProductName").unwrap_or_default();
+    let build: String = key
+        .get_value("CurrentBuildNumber")
+        .or_else(|_| key.get_value("CurrentBuild"))
+        .unwrap_or_default();
+    let display: String = key.get_value("DisplayVersion").unwrap_or_default();
+    let ubr: u32 = key.get_value("UBR").unwrap_or_default();
+    format_managed_windows_version(&product, &build, &display, ubr)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn managed_windows_version() -> String {
+    String::new()
+}
+
+#[cfg(test)]
+mod managed_windows_version_tests {
+    use super::format_managed_windows_version;
+
+    #[test]
+    fn distinguishes_windows_11_from_nt10_and_preserves_edition() {
+        assert_eq!(
+            format_managed_windows_version("Windows 10 Pro", "22631", "23H2", 4602),
+            "Windows 11 Pro 23H2 (Build 22631.4602)"
+        );
+        assert_eq!(
+            format_managed_windows_version("Windows 10 Enterprise", "19045", "22H2", 0),
+            "Windows 10 Enterprise 22H2 (Build 19045)"
+        );
+    }
+
+    #[test]
+    fn does_not_rebrand_windows_server() {
+        assert_eq!(
+            format_managed_windows_version("Windows Server 2022 Datacenter", "20348", "", 0),
+            "Windows Server 2022 Datacenter (Build 20348)"
+        );
+    }
+}

@@ -7,10 +7,584 @@
 #include <winternl.h>
 #include <netfw.h>
 #include <shlwapi.h>
+#include <bcrypt.h>
+#include <wincred.h>
+#include <wincrypt.h>
+#include <string>
+#include <vector>
+#include <cstring>
 
 #include "./Common.h"
+#include "./ManagedSecret.h"
 
 #pragma comment(lib, "Shlwapi.lib")
+#pragma comment(lib, "Bcrypt.lib")
+#pragma comment(lib, "Credui.lib")
+#pragma comment(lib, "Crypt32.lib")
+
+namespace
+{
+constexpr const WCHAR* kManagedRegistryPath = L"SOFTWARE\\RustDesk\\Managed";
+constexpr const WCHAR* kRemoteStorageValue = L"RemotePasswordStorage";
+constexpr const WCHAR* kRemoteHashHexValue = L"RemotePasswordH1Hex";
+constexpr const WCHAR* kRemoteSaltValue = L"RemotePasswordSalt";
+constexpr const WCHAR* kAdminStorageValue = L"AdminPasswordStorage";
+constexpr const WCHAR* kAdminHashHexValue = L"AdminPasswordH1Hex";
+constexpr const WCHAR* kAdminSaltValue = L"AdminPasswordSalt";
+bool ParseManagedPasswordHash(BYTE out[32])
+{
+    const char* hex = RUSTDESK_MANAGED_PASSWORD_H1_HEX;
+    if (hex == nullptr || strlen(hex) != 64)
+    {
+        return false;
+    }
+
+    for (size_t i = 0; i < 32; ++i)
+    {
+        auto nibble = [](char ch, BYTE& value) -> bool {
+            if (ch >= '0' && ch <= '9') {
+                value = static_cast<BYTE>(ch - '0');
+                return true;
+            }
+            if (ch >= 'a' && ch <= 'f') {
+                value = static_cast<BYTE>(ch - 'a' + 10);
+                return true;
+            }
+            if (ch >= 'A' && ch <= 'F') {
+                value = static_cast<BYTE>(ch - 'A' + 10);
+                return true;
+            }
+            return false;
+        };
+
+        BYTE high = 0;
+        BYTE low = 0;
+        if (!nibble(hex[i * 2], high) || !nibble(hex[i * 2 + 1], low))
+        {
+            SecureZeroMemory(out, 32);
+            return false;
+        }
+        out[i] = static_cast<BYTE>((high << 4) | low);
+    }
+    return true;
+}
+
+bool Sha256(const BYTE* data, ULONG dataLength, BYTE out[32])
+{
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    DWORD objectLength = 0;
+    DWORD resultLength = 0;
+    std::vector<BYTE> object;
+    bool ok = false;
+
+    NTSTATUS status = BCryptOpenAlgorithmProvider(
+        &algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+    if (status < 0)
+        goto LExit;
+
+    status = BCryptGetProperty(
+        algorithm,
+        BCRYPT_OBJECT_LENGTH,
+        reinterpret_cast<PUCHAR>(&objectLength),
+        sizeof(objectLength),
+        &resultLength,
+        0);
+    if (status < 0 || objectLength == 0)
+        goto LExit;
+
+    object.resize(objectLength);
+    status = BCryptCreateHash(
+        algorithm,
+        &hash,
+        object.data(),
+        objectLength,
+        nullptr,
+        0,
+        0);
+    if (status < 0)
+        goto LExit;
+
+    status = BCryptHashData(hash, const_cast<PUCHAR>(data), dataLength, 0);
+    if (status < 0)
+        goto LExit;
+
+    status = BCryptFinishHash(hash, out, 32, 0);
+    ok = status >= 0;
+
+LExit:
+    if (!object.empty())
+        SecureZeroMemory(object.data(), object.size());
+    if (hash != nullptr)
+        BCryptDestroyHash(hash);
+    if (algorithm != nullptr)
+        BCryptCloseAlgorithmProvider(algorithm, 0);
+    return ok;
+}
+
+bool WideToUtf8(const WCHAR* value, std::string& out)
+{
+    if (value == nullptr)
+        return false;
+
+    const int length = WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS, value, -1, nullptr, 0, nullptr, nullptr);
+    if (length <= 0)
+        return false;
+
+    std::string buffer(static_cast<size_t>(length), '\0');
+    if (WideCharToMultiByte(
+            CP_UTF8, WC_ERR_INVALID_CHARS, value, -1, &buffer[0], length,
+            nullptr, nullptr) != length)
+    {
+        if (!buffer.empty())
+            SecureZeroMemory(&buffer[0], buffer.size());
+        return false;
+    }
+
+    buffer.resize(static_cast<size_t>(length - 1));
+    out.swap(buffer);
+    return true;
+}
+
+bool HashManagedPassword(const WCHAR* value, const std::string& salt, BYTE out[32])
+{
+    if (value == nullptr || value[0] == L'\0' || salt.empty())
+        return false;
+
+    std::string material;
+    if (!WideToUtf8(value, material))
+        return false;
+    material.append(salt);
+    const bool ok = Sha256(
+        reinterpret_cast<const BYTE*>(material.data()),
+        static_cast<ULONG>(material.size()),
+        out);
+    if (!material.empty())
+        SecureZeroMemory(&material[0], material.size());
+    return ok;
+}
+
+bool ReadRegistryString(const WCHAR* valueName, std::wstring& value)
+{
+    HKEY key = nullptr;
+    LONG result = RegOpenKeyExW(
+        HKEY_LOCAL_MACHINE, kManagedRegistryPath, 0,
+        KEY_READ | KEY_WOW64_64KEY, &key);
+    if (result != ERROR_SUCCESS)
+        return false;
+
+    DWORD type = 0;
+    DWORD bytes = 0;
+    result = RegQueryValueExW(key, valueName, nullptr, &type, nullptr, &bytes);
+    if (result != ERROR_SUCCESS || type != REG_SZ || bytes < sizeof(WCHAR))
+    {
+        RegCloseKey(key);
+        return false;
+    }
+
+    std::vector<WCHAR> buffer(bytes / sizeof(WCHAR) + 1, L'\0');
+    result = RegQueryValueExW(
+        key, valueName, nullptr, &type,
+        reinterpret_cast<LPBYTE>(buffer.data()), &bytes);
+    RegCloseKey(key);
+    if (result != ERROR_SUCCESS)
+        return false;
+
+    value.assign(buffer.data());
+    return !value.empty();
+}
+
+bool WriteRegistryString(const WCHAR* valueName, const std::wstring& value)
+{
+    HKEY key = nullptr;
+    DWORD disposition = 0;
+    LONG result = RegCreateKeyExW(
+        HKEY_LOCAL_MACHINE, kManagedRegistryPath, 0, nullptr,
+        REG_OPTION_NON_VOLATILE, KEY_SET_VALUE | KEY_WOW64_64KEY,
+        nullptr, &key, &disposition);
+    if (result != ERROR_SUCCESS)
+        return false;
+
+    const DWORD bytes =
+        static_cast<DWORD>((value.size() + 1) * sizeof(WCHAR));
+    result = RegSetValueExW(
+        key, valueName, 0, REG_SZ,
+        reinterpret_cast<const BYTE*>(value.c_str()), bytes);
+    RegCloseKey(key);
+    return result == ERROR_SUCCESS;
+}
+
+std::wstring HashToHex(const BYTE hash[32])
+{
+    static const WCHAR kHex[] = L"0123456789abcdef";
+    std::wstring value(64, L'0');
+    for (size_t i = 0; i < 32; ++i)
+    {
+        value[i * 2] = kHex[(hash[i] >> 4) & 0x0f];
+        value[i * 2 + 1] = kHex[hash[i] & 0x0f];
+    }
+    return value;
+}
+
+bool HashToStorage(const BYTE hash[32], std::wstring& storage)
+{
+    DWORD chars = 0;
+    if (!CryptBinaryToStringW(
+            hash, 32, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF,
+            nullptr, &chars) || chars == 0)
+        return false;
+
+    std::vector<WCHAR> encoded(chars, L'\0');
+    if (!CryptBinaryToStringW(
+            hash, 32, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF,
+            encoded.data(), &chars))
+        return false;
+
+    storage.assign(L"00");
+    storage.append(encoded.data());
+    return true;
+}
+
+bool ParseHexHashText(const std::wstring& hex, BYTE out[32])
+{
+    if (hex.size() != 64)
+        return false;
+
+    auto nibble = [](WCHAR ch, BYTE& value) -> bool {
+        if (ch >= L'0' && ch <= L'9') {
+            value = static_cast<BYTE>(ch - L'0');
+            return true;
+        }
+        if (ch >= L'a' && ch <= L'f') {
+            value = static_cast<BYTE>(ch - L'a' + 10);
+            return true;
+        }
+        if (ch >= L'A' && ch <= L'F') {
+            value = static_cast<BYTE>(ch - L'A' + 10);
+            return true;
+        }
+        return false;
+    };
+
+    for (size_t i = 0; i < 32; ++i)
+    {
+        BYTE high = 0;
+        BYTE low = 0;
+        if (!nibble(hex[i * 2], high) || !nibble(hex[i * 2 + 1], low))
+        {
+            SecureZeroMemory(out, 32);
+            return false;
+        }
+        out[i] = static_cast<BYTE>((high << 4) | low);
+    }
+    return true;
+}
+
+bool PersistManagedPasswordMaterial(
+    const WCHAR* value,
+    const char* saltLiteral,
+    const WCHAR* storageName,
+    const WCHAR* hashHexName,
+    const WCHAR* saltName)
+{
+    if (value == nullptr || value[0] == L'\0' ||
+        saltLiteral == nullptr || saltLiteral[0] == '\0')
+        return false;
+
+    BYTE hash[32] = {};
+    const std::string salt(saltLiteral);
+    if (!HashManagedPassword(value, salt, hash))
+        return false;
+
+    std::wstring storage;
+    const std::wstring hex = HashToHex(hash);
+    const int wideLength =
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, salt.c_str(), -1, nullptr, 0);
+    if (wideLength <= 1)
+    {
+        SecureZeroMemory(hash, sizeof(hash));
+        return false;
+    }
+
+    std::vector<WCHAR> saltBuffer(static_cast<size_t>(wideLength), L'\0');
+    if (MultiByteToWideChar(
+            CP_UTF8, MB_ERR_INVALID_CHARS, salt.c_str(), -1,
+            saltBuffer.data(), wideLength) != wideLength)
+    {
+        SecureZeroMemory(hash, sizeof(hash));
+        return false;
+    }
+
+    const bool ok =
+        HashToStorage(hash, storage) &&
+        WriteRegistryString(storageName, storage) &&
+        WriteRegistryString(hashHexName, hex) &&
+        WriteRegistryString(saltName, std::wstring(saltBuffer.data()));
+
+    SecureZeroMemory(hash, sizeof(hash));
+    if (!storage.empty())
+        SecureZeroMemory(&storage[0], storage.size() * sizeof(WCHAR));
+    return ok;
+}
+
+bool VerifyManagedPassword(const WCHAR* password)
+{
+    if (password == nullptr || password[0] == L'\0')
+        return false;
+
+    BYTE expected[32] = {};
+    BYTE actual[32] = {};
+    std::string salt;
+
+    std::wstring registryHex;
+    std::wstring registrySalt;
+    if (ReadRegistryString(kRemoteHashHexValue, registryHex) &&
+        ReadRegistryString(kRemoteSaltValue, registrySalt))
+    {
+        if (!ParseHexHashText(registryHex, expected) ||
+            !WideToUtf8(registrySalt.c_str(), salt) ||
+            salt.empty())
+        {
+            SecureZeroMemory(expected, sizeof(expected));
+            return false;
+        }
+    }
+    else
+    {
+        if (!ParseManagedPasswordHash(expected) ||
+            RUSTDESK_MANAGED_PASSWORD_SALT[0] == '\0')
+            return false;
+        salt.assign(RUSTDESK_MANAGED_PASSWORD_SALT);
+    }
+
+    const bool hashed = HashManagedPassword(password, salt, actual);
+    BYTE diff = hashed ? 0 : 1;
+    if (hashed)
+    {
+        for (size_t i = 0; i < 32; ++i)
+            diff |= static_cast<BYTE>(actual[i] ^ expected[i]);
+    }
+
+    if (!salt.empty())
+        SecureZeroMemory(&salt[0], salt.size());
+    SecureZeroMemory(expected, sizeof(expected));
+    SecureZeroMemory(actual, sizeof(actual));
+    return diff == 0;
+}
+} // namespace
+
+UINT __stdcall PrepareManagedPasswords(
+    __in MSIHANDLE hInstall)
+{
+    HRESULT hr = WcaInitialize(hInstall, "PrepareManagedPasswords");
+    if (FAILED(hr))
+        return WcaFinalize(ERROR_INSTALL_FAILURE);
+
+    LPWSTR remote = nullptr;
+    LPWSTR admin = nullptr;
+    LPWSTR data = nullptr;
+
+    hr = WcaGetProperty(L"REMOTE_PASSWORD", &remote);
+    ExitOnFailure(hr, "failed to read REMOTE_PASSWORD");
+    hr = WcaGetProperty(L"ADMIN_PASSWORD", &admin);
+    ExitOnFailure(hr, "failed to read ADMIN_PASSWORD");
+
+    hr = WcaWriteStringToCaData(remote ? remote : L"", &data);
+    ExitOnFailure(hr, "failed to serialize remote credential");
+    hr = WcaWriteStringToCaData(admin ? admin : L"", &data);
+    ExitOnFailure(hr, "failed to serialize management credential");
+    hr = WcaSetProperty(L"ApplyManagedPasswords", data);
+    ExitOnFailure(hr, "failed to set managed credential action data");
+
+LExit:
+    if (remote != nullptr)
+        SecureZeroMemory(remote, (wcslen(remote) + 1) * sizeof(WCHAR));
+    if (admin != nullptr)
+        SecureZeroMemory(admin, (wcslen(admin) + 1) * sizeof(WCHAR));
+    if (data != nullptr)
+        SecureZeroMemory(data, (wcslen(data) + 1) * sizeof(WCHAR));
+    ReleaseStr(remote);
+    ReleaseStr(admin);
+    ReleaseStr(data);
+    return WcaFinalize(SUCCEEDED(hr) ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE);
+}
+
+UINT __stdcall ApplyManagedPasswords(
+    __in MSIHANDLE hInstall)
+{
+    HRESULT hr = WcaInitialize(hInstall, "ApplyManagedPasswords");
+    if (FAILED(hr))
+        return WcaFinalize(ERROR_INSTALL_FAILURE);
+
+    LPWSTR data = nullptr;
+    LPWSTR cursor = nullptr;
+    LPWSTR remote = nullptr;
+    LPWSTR admin = nullptr;
+
+    hr = WcaGetProperty(L"CustomActionData", &data);
+    ExitOnFailure(hr, "failed to read managed credential action data");
+
+    cursor = data;
+    hr = WcaReadStringFromCaData(&cursor, &remote);
+    ExitOnFailure(hr, "failed to deserialize remote credential");
+    hr = WcaReadStringFromCaData(&cursor, &admin);
+    ExitOnFailure(hr, "failed to deserialize management credential");
+
+    if (remote != nullptr && remote[0] != L'\0')
+    {
+        if (!PersistManagedPasswordMaterial(
+                remote,
+                RUSTDESK_MANAGED_PASSWORD_SALT,
+                kRemoteStorageValue,
+                kRemoteHashHexValue,
+                kRemoteSaltValue))
+        {
+            hr = E_FAIL;
+            ExitOnFailure(hr, "failed to persist custom remote credential material");
+        }
+        WcaLog(LOGMSG_STANDARD, "Custom remote credential material applied.");
+    }
+
+    if (admin != nullptr && admin[0] != L'\0')
+    {
+        if (!PersistManagedPasswordMaterial(
+                admin,
+                RUSTDESK_MANAGED_ADMIN_PASSWORD_SALT,
+                kAdminStorageValue,
+                kAdminHashHexValue,
+                kAdminSaltValue))
+        {
+            hr = E_FAIL;
+            ExitOnFailure(hr, "failed to persist custom management credential material");
+        }
+        WcaLog(LOGMSG_STANDARD, "Custom management credential material applied.");
+    }
+
+LExit:
+    if (remote != nullptr)
+        SecureZeroMemory(remote, (wcslen(remote) + 1) * sizeof(WCHAR));
+    if (admin != nullptr)
+        SecureZeroMemory(admin, (wcslen(admin) + 1) * sizeof(WCHAR));
+    if (data != nullptr)
+        SecureZeroMemory(data, (wcslen(data) + 1) * sizeof(WCHAR));
+    ReleaseStr(remote);
+    ReleaseStr(admin);
+    ReleaseStr(data);
+    return WcaFinalize(SUCCEEDED(hr) ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE);
+}
+
+UINT __stdcall RemoveManagedPasswordOverrides(
+    __in MSIHANDLE hInstall)
+{
+    HRESULT hr = WcaInitialize(hInstall, "RemoveManagedPasswordOverrides");
+    if (FAILED(hr))
+        return WcaFinalize(ERROR_INSTALL_FAILURE);
+
+    const LONG result = RegDeleteKeyExW(
+        HKEY_LOCAL_MACHINE,
+        kManagedRegistryPath,
+        KEY_WOW64_64KEY,
+        0);
+    if (result != ERROR_SUCCESS && result != ERROR_FILE_NOT_FOUND)
+    {
+        WcaLog(
+            LOGMSG_STANDARD,
+            "Failed to remove managed credential overrides. Error: %ld",
+            result);
+    }
+    else
+    {
+        WcaLog(LOGMSG_STANDARD, "Managed credential overrides removed.");
+    }
+
+    return WcaFinalize(ERROR_SUCCESS);
+}
+
+UINT __stdcall VerifyUninstallPassword(
+    __in MSIHANDLE hInstall)
+{
+    HRESULT hr = WcaInitialize(hInstall, "VerifyUninstallPassword");
+    if (FAILED(hr))
+    {
+        return WcaFinalize(ERROR_INSTALL_FAILURE);
+    }
+
+    WCHAR uiLevelText[16] = {};
+    DWORD uiLevelLength = ARRAYSIZE(uiLevelText);
+    if (MsiGetPropertyW(
+            hInstall, L"UILevel", uiLevelText, &uiLevelLength) == ERROR_SUCCESS)
+    {
+        const int uiLevel = _wtoi(uiLevelText);
+        if (uiLevel > 0 && uiLevel <= 2)
+        {
+            WcaLog(LOGMSG_STANDARD,
+                "Silent uninstall is blocked by managed password protection.");
+            return WcaFinalize(ERROR_INSTALL_FAILURE);
+        }
+    }
+
+    for (int attempt = 0; attempt < 3; ++attempt)
+    {
+        CREDUI_INFOW ui = {};
+        ui.cbSize = sizeof(ui);
+        ui.hwndParent = GetForegroundWindow();
+        ui.pszMessageText = L"Enter the fixed RustDesk password to continue uninstalling.";
+        ui.pszCaptionText = L"RustDesk - Uninstall Password";
+
+        WCHAR userName[CREDUI_MAX_USERNAME_LENGTH + 1] = L"RustDesk";
+        WCHAR password[CREDUI_MAX_PASSWORD_LENGTH + 1] = {};
+        BOOL save = FALSE;
+
+        DWORD result = CredUIPromptForCredentialsW(
+            &ui,
+            L"RustDesk Managed Uninstall",
+            nullptr,
+            0,
+            userName,
+            ARRAYSIZE(userName),
+            password,
+            ARRAYSIZE(password),
+            &save,
+            CREDUI_FLAGS_GENERIC_CREDENTIALS |
+                CREDUI_FLAGS_DO_NOT_PERSIST |
+                CREDUI_FLAGS_ALWAYS_SHOW_UI |
+                CREDUI_FLAGS_EXCLUDE_CERTIFICATES |
+                CREDUI_FLAGS_KEEP_USERNAME);
+
+        if (result == ERROR_CANCELLED)
+        {
+            SecureZeroMemory(password, sizeof(password));
+            return WcaFinalize(ERROR_INSTALL_USEREXIT);
+        }
+        if (result != NO_ERROR)
+        {
+            SecureZeroMemory(password, sizeof(password));
+            WcaLog(LOGMSG_STANDARD,
+                "Uninstall password prompt failed with error: %lu", result);
+            return WcaFinalize(ERROR_INSTALL_FAILURE);
+        }
+
+        const bool authorized = VerifyManagedPassword(password);
+        SecureZeroMemory(password, sizeof(password));
+        SecureZeroMemory(userName, sizeof(userName));
+
+        if (authorized)
+        {
+            WcaLog(LOGMSG_STANDARD, "Managed uninstall password accepted.");
+            return WcaFinalize(ERROR_SUCCESS);
+        }
+
+        MessageBoxW(
+            ui.hwndParent,
+            L"Incorrect password.",
+            L"RustDesk",
+            MB_OK | MB_ICONERROR | MB_TASKMODAL);
+    }
+
+    WcaLog(LOGMSG_STANDARD, "Managed uninstall password rejected.");
+    return WcaFinalize(ERROR_INSTALL_USEREXIT);
+}
 
 UINT __stdcall CustomActionHello(
     __in MSIHANDLE hInstall)

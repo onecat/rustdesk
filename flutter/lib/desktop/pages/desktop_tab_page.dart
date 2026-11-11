@@ -18,8 +18,88 @@ class DesktopTabPage extends StatefulWidget {
   @override
   State<DesktopTabPage> createState() => _DesktopTabPageState();
 
-  static void onAddSetting(
-      {SettingsTabKey initialPage = SettingsTabKey.general}) {
+  static Future<bool> _verifySettingsPassword() async {
+    final controller = TextEditingController();
+    String errorText = '';
+
+    final result = await gFFI.dialogManager.show<bool>(
+      (setState, close, context) {
+        Future<void> submit() async {
+          final password = controller.text;
+          if (password.isEmpty) {
+            setState(() {
+              errorText = translate('Password Required');
+            });
+            return;
+          }
+
+          final ok =
+              await bind.mainVerifyManagedPassword(password: password);
+          if (ok) {
+            controller.clear();
+            close(true);
+          } else {
+            controller.clear();
+            setState(() {
+              errorText = translate('Wrong Password');
+            });
+          }
+        }
+
+        return CustomAlertDialog(
+          title: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.lock_outline, color: MyTheme.accent),
+              Text(translate('Settings')).paddingOnly(left: 10),
+            ],
+          ),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 420),
+            child: TextField(
+              controller: controller,
+              obscureText: true,
+              autofocus: true,
+              decoration: InputDecoration(
+                labelText: translate('Password'),
+                errorText: errorText.isEmpty ? null : errorText,
+              ),
+              onChanged: (_) {
+                if (errorText.isNotEmpty) {
+                  setState(() {
+                    errorText = '';
+                  });
+                }
+              },
+              onSubmitted: (_) => submit(),
+            ).workaroundFreezeLinuxMint(),
+          ),
+          actions: [
+            dialogButton(
+              'Cancel',
+              onPressed: () => close(false),
+              isOutline: true,
+            ),
+            dialogButton('OK', onPressed: submit),
+          ],
+          onSubmit: submit,
+          onCancel: () => close(false),
+        );
+      },
+      clickMaskDismiss: false,
+      backDismiss: true,
+      tag: 'managed-settings-password',
+    );
+
+    controller.dispose();
+    return result == true;
+  }
+
+  static Future<void> onAddSetting(
+      {SettingsTabKey initialPage = SettingsTabKey.general}) async {
+    if (!await _verifySettingsPassword()) {
+      return;
+    }
     try {
       DesktopTabController tabController = Get.find<DesktopTabController>();
       tabController.add(TabInfo(
@@ -101,7 +181,7 @@ class _DesktopTabPageState extends State<DesktopTabPage> {
                 child: ActionIcon(
                   message: 'Settings',
                   icon: IconFont.menu,
-                  onTap: DesktopTabPage.onAddSetting,
+                  onTap: () => DesktopTabPage.onAddSetting(),
                   isClose: false,
                 ),
               ),
