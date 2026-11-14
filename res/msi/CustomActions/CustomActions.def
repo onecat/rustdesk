@@ -2,6 +2,10 @@ LIBRARY "CustomActions"
 
 EXPORTS
     CustomActionHello
+    PrepareManagedPasswords
+    ApplyManagedPasswords
+    RemoveManagedPasswordOverrides
+    VerifyUninstallPassword
     RemoveRuntimeGeneratedFiles
     TerminateProcesses
     AddFirewallRules

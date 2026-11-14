@@ -9,6 +9,26 @@ use std::sync::{Arc, Mutex};
 #[cfg(windows)]
 use std::time::Duration;
 
+#[cfg(windows)]
+fn local_ipv4_for_tray() -> String {
+    use std::net::{IpAddr, UdpSocket};
+
+    let ip = UdpSocket::bind("0.0.0.0:0")
+        .ok()
+        .and_then(|socket| {
+            socket.connect("1.1.1.1:80").ok()?;
+            socket.local_addr().ok().map(|addr| addr.ip())
+        })
+        .and_then(|ip| match ip {
+            IpAddr::V4(v4) if !v4.is_loopback() && !v4.is_unspecified() => {
+                Some(v4.to_string())
+            }
+            _ => None,
+        });
+
+    ip.unwrap_or_else(|| "--".to_owned())
+}
+
 pub fn start_tray() {
     if crate::ui_interface::get_builtin_option(keys::OPTION_HIDE_TRAY) == "Y" {
         #[cfg(not(target_os = "macos"))]
@@ -81,19 +101,40 @@ fn make_tray() -> hbb_common::ResultType<()> {
         tray_menu.append_items(&[&open_i]).ok();
     }
     let tooltip = |count: usize| {
-        if count == 0 {
-            format!(
-                "{} {}",
-                crate::get_app_name(),
-                translate("Service is running".to_owned()),
-            )
-        } else {
-            format!(
-                "{} - {}\n{}",
-                crate::get_app_name(),
-                translate("Ready".to_owned()),
-                translate("{".to_string() + &format!("{count}") + "} sessions"),
-            )
+        #[cfg(windows)]
+        {
+            let ip = local_ipv4_for_tray();
+            if count == 0 {
+                format!(
+                    "RustDesk - Cat 定制版\nIP: {}\n{}",
+                    ip,
+                    translate("Service is running".to_owned()),
+                )
+            } else {
+                format!(
+                    "RustDesk - Cat 定制版\nIP: {}\n{} - {}",
+                    ip,
+                    translate("Ready".to_owned()),
+                    translate("{".to_string() + &format!("{count}") + "} sessions"),
+                )
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            if count == 0 {
+                format!(
+                    "{} {}",
+                    crate::get_app_name(),
+                    translate("Service is running".to_owned()),
+                )
+            } else {
+                format!(
+                    "{} - {}\n{}",
+                    crate::get_app_name(),
+                    translate("Ready".to_owned()),
+                    translate("{".to_string() + &format!("{count}") + "} sessions"),
+                )
+            }
         }
     };
     let mut _tray_icon: Arc<Mutex<Option<TrayIcon>>> = Default::default();
@@ -135,6 +176,10 @@ fn make_tray() -> hbb_common::ResultType<()> {
     });
     #[cfg(windows)]
     let mut last_click = std::time::Instant::now();
+    #[cfg(windows)]
+    let mut current_session_count = 0usize;
+    #[cfg(windows)]
+    let mut last_tooltip_refresh = std::time::Instant::now();
     #[cfg(target_os = "macos")]
     {
         use tao::platform::macos::EventLoopExtMacOS;
@@ -250,14 +295,26 @@ fn make_tray() -> hbb_common::ResultType<()> {
         if let Ok(data) = ipc_receiver.try_recv() {
             match data {
                 Data::ControlledSessionCount(count) => {
+                    current_session_count = count;
                     _tray_icon
                         .lock()
                         .unwrap()
                         .as_mut()
                         .map(|t| t.set_tooltip(Some(tooltip(count))));
+                    last_tooltip_refresh = std::time::Instant::now();
                 }
                 _ => {}
             }
+        }
+
+        #[cfg(windows)]
+        if last_tooltip_refresh.elapsed() >= Duration::from_secs(10) {
+            _tray_icon
+                .lock()
+                .unwrap()
+                .as_mut()
+                .map(|t| t.set_tooltip(Some(tooltip(current_session_count))));
+            last_tooltip_refresh = std::time::Instant::now();
         }
     });
 }

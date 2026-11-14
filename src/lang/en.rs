@@ -126,6 +126,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("JumpLink", "View"),
         ("Please Select the screen to be shared(Operate on the peer side).", "Please select the screen to be shared(Operate on the peer side)."),
         ("One-time Password", "One-time password"),
+        ("Permanent Password", "Permanent password"),
         ("hide_cm_tip", "Allow hiding only if accepting sessions via password and using permanent password"),
         ("wayland_experiment_tip", "Wayland support is in experimental stage, please use X11 if you require unattended access."),
         ("software_render_tip", "If you're using Nvidia graphics card under Linux and the remote window closes immediately after connecting, switching to the open-source Nouveau driver and choosing to use software rendering may help. A software restart is required."),
