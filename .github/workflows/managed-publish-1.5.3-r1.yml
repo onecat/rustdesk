@@ -1,0 +1,168 @@
+name: Publish verified Cat Managed 1.5.3-r1
+
+# One-time promotion of the successful, already-built Build 1016 MSI.
+# A release-request file is the only automatic trigger. Do not rebuild binaries.
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "release-requests/managed-1.5.3-r1.json"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: rustdesk-managed-stable-release
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out release request
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Verify release request and successful build provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          request = json.loads(Path("release-requests/managed-1.5.3-r1.json").read_text(encoding="utf-8"))
+          expected = {
+              "version": "1.5.3-r1",
+              "build": 1016,
+              "source_sha": "163e12275356054d2a73c7bf9e62221db7e41fe4",
+              "run_id": 44108880975,
+              "artifact": "rustdesk-managed-1.5.3-r1-x86_64-msi",
+              "rollout": 100,
+          }
+          if request != expected:
+              raise SystemExit("Refusing release: request is not the approved Build 1016")
+          PY
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/44108880975" > source-run.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          run = json.loads(Path("source-run.json").read_text())
+          checks = {
+              "conclusion": "success",
+              "status": "completed",
+              "head_branch": "rustdesk-managed-1.5.3-r1",
+              "head_sha": "163e12275356054d2a73c7bf9e62221db7e41fe4",
+              "name": "Build RustDesk Managed x64 MSI",
+          }
+          for k,v in checks.items():
+              if run.get(k) != v:
+                  raise SystemExit(f"Refusing release: build run {k} differs: {run.get(k)!r}")
+          print("Validated source build run 44108880975")
+          PY
+
+      - name: Download exact tested MSI artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-input
+          gh run download 44108880975 --repo "$GITHUB_REPOSITORY" \
+            --name "rustdesk-managed-1.5.3-r1-x86_64-msi" --dir release-input
+
+      - name: Validate MSI SHA-256, version, build, source, size and prepare manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import datetime as dt
+          import hashlib
+          import json
+          from pathlib import Path
+          root = Path("release-input")
+          meta = json.loads((root / "managed-build.json").read_text(encoding="utf-8-sig"))
+          expected = {
+              "version": "1.5.3-r1",
+              "build": 1016,
+              "source_sha": "163e12275356054d2a73c7bf9e62221db7e41fe4",
+              "msi_revision": 30001016,
+              "msi_product_version": "1.5.3.30001016",
+              "msi_file": "rustdesk-managed-1.5.3-r1-x86_64.msi",
+          }
+          for k,v in expected.items():
+              if meta.get(k) != v:
+                  raise SystemExit(f"Refusing release: metadata {k} differs: {meta.get(k)!r}")
+          msi = root / expected["msi_file"]
+          if not msi.is_file():
+              raise SystemExit("Refusing release: MSI not found")
+          hasher = hashlib.sha256()
+          size = 0
+          with msi.open("rb") as fh:
+              for chunk in iter(lambda: fh.read(1024*1024), b""):
+                  size += len(chunk)
+                  hasher.update(chunk)
+          sha = hasher.hexdigest()
+          if size != meta.get("size") or sha != str(meta.get("sha256", "")).lower():
+              raise SystemExit("Refusing release: MSI SHA-256 or size mismatch")
+          (root / (msi.name + ".sha256")).write_text(f"{sha}  {msi.name}\n", encoding="ascii")
+          manifest = {
+              "schema": 1,
+              "channel": "stable",
+              "version": "1.5.3-r1",
+              "build": 1016,
+              "published_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+              "package": {
+                  "url": f"https://github.com/onecat/rustdesk/releases/download/managed-1.5.3-r1/{msi.name}",
+                  "sha256": sha,
+                  "size": size,
+              },
+              "rollout": 100,
+              "mandatory": False,
+          }
+          Path("stable.json").write_text(json.dumps(manifest, separators=(",", ":"), sort_keys=True)+"\n", encoding="utf-8")
+          print(f"Validated MSI: {size} bytes, SHA256={sha}")
+          PY
+
+      - name: Publish immutable Managed 1.5.3-r1 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="managed-1.5.3-r1"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; refusing to overwrite immutable release."
+            exit 1
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists; refusing to reuse it."
+            exit 1
+          fi
+          gh release create "$TAG" \
+            "release-input/rustdesk-managed-1.5.3-r1-x86_64.msi" \
+            "release-input/rustdesk-managed-1.5.3-r1-x86_64.msi.sha256" \
+            "release-input/managed-build.json" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "163e12275356054d2a73c7bf9e62221db7e41fe4" \
+            --title "RustDesk Managed 1.5.3-r1" \
+            --notes "Cat Managed Build 1016, based on upstream RustDesk 1.5.3. Windows x64 MSI with Cat server/password/LAN/diagnostic/update customization. Built and verified in Actions run 44108880975. Tested artifact SHA-256 is in the .sha256 asset."
+
+      - name: Promote 1.5.3-r1 to 100 percent Stable rollout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view managed-update --repo "$GITHUB_REPOSITORY" >/dev/null
+          gh release upload managed-update stable.json --clobber --repo "$GITHUB_REPOSITORY"
+          mkdir -p verify-stable
+          gh release download managed-update --repo "$GITHUB_REPOSITORY" \
+            --pattern stable.json --dir verify-stable
+          cmp stable.json verify-stable/stable.json
+          gh release view managed-1.5.3-r1 --repo "$GITHUB_REPOSITORY" \
+            --json tagName,assets --jq '{tagName: .tagName, assets: [.assets[].name]}'
+          echo "Stable manifest matches verified Build 1016, rollout=100."
