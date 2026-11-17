@@ -39,3 +39,7 @@ A source merge or structural check is **not** a successful build or Windows inte
 ## Build trigger verification
 
 The integration branch's `push` workflow is expected to build an unsigned/test x64 MSI without publishing a release (`publish_release` only applies to `workflow_dispatch` and defaults to `false`). This non-workflow documentation update exercises the `push` trigger while keeping the existing `managed-1.5.0-r1` Stable release untouched. The existence and outcome of a corresponding GitHub Actions run must be checked independently; a source commit is not itself evidence that a build started.
+
+## CI re-enable validation
+
+A non-workflow documentation commit after the fork owner's Actions re-enable is used to validate the branch `push` trigger for the non-publishing `1.5.3-r1` / Build 1016 Windows MSI pipeline. The build and its result must be verified from an actual Actions run before reporting success.
