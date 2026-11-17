@@ -1,0 +1,8 @@
+{
+  "version": "1.5.3-r1",
+  "build": 1016,
+  "source_sha": "163e12275356054d2a73c7bf9e62221db7e41fe4",
+  "run_id": 44108880975,
+  "artifact": "rustdesk-managed-1.5.3-r1-x86_64-msi",
+  "rollout": 100
+}
