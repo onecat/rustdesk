@@ -3,14 +3,6 @@ name: Reconcile RustDesk Managed Stable
 on:
   release:
     types: [published]
-  workflow_run:
-    workflows: ["Build RustDesk Managed x64 MSI"]
-    types: [completed]
-  push:
-    branches:
-      - master
-    paths:
-      - ".github/workflows/managed-stable-reconcile.yml"
   workflow_dispatch:
 
 permissions:

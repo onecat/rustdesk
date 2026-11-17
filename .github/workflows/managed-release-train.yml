@@ -1,9 +1,7 @@
-name: Continue RustDesk Managed Release Train
+name: Continue RustDesk Managed Release Train (legacy, manual only)
 
 on:
-  workflow_run:
-    workflows: ["Build RustDesk Managed x64 MSI"]
-    types: [completed]
+  workflow_dispatch:
 
 permissions:
   actions: write
