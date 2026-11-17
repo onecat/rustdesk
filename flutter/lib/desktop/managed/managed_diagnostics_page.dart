@@ -37,6 +37,7 @@ class _ManagedDiagnosticsPageState extends State<ManagedDiagnosticsPage> {
   bool _loadingNetwork = false;
   bool _runningDiagnostics = false;
   bool _checkingUpdate = false;
+  String _updateCheckMessage = '';
 
   List<Map<String, dynamic>> _interfaces = const [];
   List<_ProbeResult> _probes = const [];
@@ -292,20 +293,41 @@ $items | ConvertTo-Json -Compress
 
   Future<void> _checkUpdate() async {
     if (_checkingUpdate) return;
-    setState(() => _checkingUpdate = true);
+    setState(() {
+      _checkingUpdate = true;
+      _updateCheckMessage = '';
+    });
     final before = (_updateState['last_check_unix'] as num?)?.toInt() ?? 0;
     try {
+      // The native API queues the request; wait for an actual completed
+      // check timestamp rather than treating the queue operation as success.
       await bind.mainManagedCheckUpdate();
-      for (var i = 0; i < 12; i++) {
+      var finished = false;
+      // The manifest request may time out and retry via a fallback URL.
+      // Twelve seconds is not enough for the configured network timeouts.
+      for (var i = 0; i < 90; i++) {
         await Future.delayed(const Duration(seconds: 1));
         if (!mounted) return;
         await _loadUpdateState();
         final after =
             (_updateState['last_check_unix'] as num?)?.toInt() ?? 0;
-        if (after > before) break;
+        if (after > before) {
+          finished = true;
+          break;
+        }
+      }
+      if (!finished && mounted) {
+        setState(() {
+          _updateCheckMessage = '检查尚未完成或状态未刷新，请稍后重试';
+        });
       }
     } catch (e) {
-      debugPrint('Failed to request R11 update check: $e');
+      debugPrint('Failed to request Managed update check: $e');
+      if (mounted) {
+        setState(() {
+          _updateCheckMessage = '检查请求失败，请查看日志';
+        });
+      }
     } finally {
       if (mounted) setState(() => _checkingUpdate = false);
     }
@@ -581,11 +603,15 @@ $items | ConvertTo-Json -Compress
         _kv('上次检查', _formatUnix(_updateState['last_check_unix'])),
         _kv(
           '状态',
-          hasUpdate
-              ? '发现新版本'
-              : _updateResultText(
-                  _updateState['last_result']?.toString() ?? '',
-                ),
+          _checkingUpdate
+              ? '正在检查更新…'
+              : _updateCheckMessage.isNotEmpty
+                  ? _updateCheckMessage
+                  : hasUpdate
+                      ? '发现新版本'
+                      : _updateResultText(
+                          _updateState['last_result']?.toString() ?? '',
+                        ),
         ),
         _kv(
           '下载状态',

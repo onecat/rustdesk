@@ -21,7 +21,7 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        mpsc::{channel, Receiver, Sender},
+        mpsc::{channel, Receiver, RecvTimeoutError, Sender},
         Mutex,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -211,14 +211,20 @@ fn start_auto_update_check_(rx_msg: Receiver<UpdateMsg>) {
     } else {
         INITIAL_CHECK_DELAY.as_secs()
     };
-    std::thread::sleep(Duration::from_secs(initial_delay));
+    // A manually requested check must never sit behind the randomized startup delay.
+    // The timeout still schedules the first automatic check without busy waiting.
+    let first_is_manual = match rx_msg.recv_timeout(Duration::from_secs(initial_delay)) {
+        Ok(UpdateMsg::CheckUpdate) => true,
+        Ok(UpdateMsg::Exit) | Err(RecvTimeoutError::Disconnected) => return,
+        Err(RecvTimeoutError::Timeout) => false,
+    };
 
     let mut check_interval = normal_check_interval();
     let mut last_check_time = Instant::now()
         .checked_sub(MIN_INTERVAL)
         .unwrap_or_else(Instant::now);
 
-    match check_update(false) {
+    match check_update(first_is_manual) {
         Ok(CheckOutcome::RetrySoon) => check_interval = RETRY_INTERVAL,
         Ok(CheckOutcome::Done) => {
             last_check_time = Instant::now();
@@ -236,15 +242,16 @@ fn start_auto_update_check_(rx_msg: Receiver<UpdateMsg>) {
     loop {
         let recv_res = rx_msg.recv_timeout(check_interval);
         match &recv_res {
-            Ok(UpdateMsg::CheckUpdate) | Err(_) => {
-                if last_check_time.elapsed() < MIN_INTERVAL {
+            Ok(UpdateMsg::CheckUpdate) | Err(RecvTimeoutError::Timeout) => {
+                let manually = matches!(&recv_res, Ok(UpdateMsg::CheckUpdate));
+                if should_rate_limit_update_check(manually, last_check_time.elapsed()) {
                     continue;
                 }
                 if !crate::managed_config::managed_updates_enabled() && !has_no_active_conns() {
                     check_interval = RETRY_INTERVAL;
                     continue;
                 }
-                match check_update(matches!(&recv_res, Ok(UpdateMsg::CheckUpdate))) {
+                match check_update(manually) {
                     Ok(CheckOutcome::Done) => {
                         last_check_time = Instant::now();
                         check_interval = normal_check_interval();
@@ -262,8 +269,31 @@ fn start_auto_update_check_(rx_msg: Receiver<UpdateMsg>) {
                     }
                 }
             }
-            Ok(UpdateMsg::Exit) => break,
+            Ok(UpdateMsg::Exit) | Err(RecvTimeoutError::Disconnected) => break,
         }
+    }
+}
+
+// The 10-minute minimum protects scheduled checks only; explicit UI requests
+// should be serviced even immediately after startup or another check.
+fn should_rate_limit_update_check(manually: bool, elapsed: Duration) -> bool {
+    !manually && elapsed < MIN_INTERVAL
+}
+
+#[cfg(test)]
+mod managed_check_interval_tests {
+    use super::{should_rate_limit_update_check, MIN_INTERVAL};
+    use std::time::Duration;
+
+    #[test]
+    fn manual_checks_are_not_suppressed_by_automatic_check_cooldown() {
+        assert!(!should_rate_limit_update_check(true, Duration::ZERO));
+        assert!(!should_rate_limit_update_check(true, Duration::from_secs(1)));
+        assert!(!should_rate_limit_update_check(true, MIN_INTERVAL));
+
+        assert!(should_rate_limit_update_check(false, Duration::ZERO));
+        assert!(should_rate_limit_update_check(false, MIN_INTERVAL - Duration::from_secs(1)));
+        assert!(!should_rate_limit_update_check(false, MIN_INTERVAL));
     }
 }
 

@@ -6,8 +6,8 @@ use hbb_common::{
 };
 use std::{collections::HashMap, net::Ipv4Addr, sync::Mutex};
 
-pub(crate) const MANAGED_VERSION: &str = "1.5.3-r1";
-pub(crate) const MANAGED_BUILD: u64 = 1016;
+pub(crate) const MANAGED_VERSION: &str = "1.5.3-r2";
+pub(crate) const MANAGED_BUILD: u64 = 1017;
 pub(crate) const MANAGED_UPDATE_MANIFEST_BASE: &str =
     "https://github.com/onecat/rustdesk/releases/download/managed-update";
 pub(crate) const MANAGED_GITHUB_FALLBACK_PREFIX: &str = "https://gh.catmak.name/";
