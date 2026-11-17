@@ -35,3 +35,7 @@ The upstream 1.5.3 Windows installer changes, IPC authentication, relay destinat
 ## Known scope limitation
 
 A source merge or structural check is **not** a successful build or Windows integration test. Until a corresponding GitHub Actions run produces and validates an MSI, version 1.5.3-r1 remains **unverified/unreleased**.
+
+## Build trigger verification
+
+The integration branch's `push` workflow is expected to build an unsigned/test x64 MSI without publishing a release (`publish_release` only applies to `workflow_dispatch` and defaults to `false`). This non-workflow documentation update exercises the `push` trigger while keeping the existing `managed-1.5.0-r1` Stable release untouched. The existence and outcome of a corresponding GitHub Actions run must be checked independently; a source commit is not itself evidence that a build started.
